@@ -11,7 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
@@ -110,7 +110,7 @@ fun CharactersScreen(
                             IconButton(onClick = {
                                 viewModel.startChat(character, onStartChat)
                             }) {
-                                Icon(Icons.Filled.Chat, contentDescription = "Start chat")
+                                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Start chat")
                             }
                             IconButton(onClick = { onEditCharacter(character.id) }) {
                                 Icon(Icons.Filled.Edit, contentDescription = "Edit")

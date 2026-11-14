@@ -13,7 +13,9 @@ import kotlinx.serialization.json.put
 @Serializable
 data class ChatMessage(
     val role: String,
-    val content: String
+    val content: String,
+    /** Image URLs (normally `data:` URLs) sent as `image_url` content parts to vision models. */
+    val images: List<String> = emptyList()
 )
 
 @Serializable
@@ -40,7 +42,24 @@ internal fun ChatRequest.toJsonElement(): JsonElement = buildJsonObject {
         messages.forEach { m ->
             add(buildJsonObject {
                 put("role", m.role)
-                put("content", m.content)
+                if (m.images.isEmpty()) {
+                    put("content", m.content)
+                } else {
+                    put("content", buildJsonArray {
+                        if (m.content.isNotBlank()) {
+                            add(buildJsonObject {
+                                put("type", "text")
+                                put("text", m.content)
+                            })
+                        }
+                        m.images.forEach { url ->
+                            add(buildJsonObject {
+                                put("type", "image_url")
+                                put("image_url", buildJsonObject { put("url", url) })
+                            })
+                        }
+                    })
+                }
             })
         }
     })
