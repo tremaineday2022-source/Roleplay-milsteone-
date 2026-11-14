@@ -1,0 +1,3 @@
+-keepattributes *Annotation*
+-keep class com.roleplay.ai.data.api.** { *; }
+-dontwarn okhttp3.internal.platform.**
