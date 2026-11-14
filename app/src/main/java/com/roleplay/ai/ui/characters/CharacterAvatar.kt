@@ -8,18 +8,30 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.roleplay.ai.data.db.CharacterEntity
+import com.roleplay.ai.data.files.ImageStore
+import com.roleplay.ai.ui.common.FileImage
+import java.io.File
 
+/** The character's profile picture file, if one is set and still on the device. */
+fun ImageStore.avatarFile(character: CharacterEntity?): File? =
+    character?.avatarImage?.takeIf { exists(it) }?.let { file(it) }
+
+/** A round avatar: the profile picture when there is one, else the first letter on a colour. */
 @Composable
-fun CharacterAvatar(name: String, color: Long?, size: Dp = 40.dp) {
+fun CharacterAvatar(name: String, color: Long?, size: Dp = 40.dp, image: File? = null) {
     val resolved = color?.let { Color(it) } ?: Color(0xFF6750A4)
     Box(
         modifier = Modifier
             .size(size)
-            .background(resolved, CircleShape),
+            .clip(CircleShape)
+            .background(resolved),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -27,5 +39,15 @@ fun CharacterAvatar(name: String, color: Long?, size: Dp = 40.dp) {
             color = Color.White,
             fontWeight = FontWeight.SemiBold
         )
+        if (image != null) {
+            // Drawn over the letter, which shows only until the picture has loaded.
+            FileImage(
+                file = image,
+                modifier = Modifier.size(size),
+                maxSidePx = 256,
+                contentScale = ContentScale.Crop,
+                contentDescription = "$name's picture"
+            )
+        }
     }
 }

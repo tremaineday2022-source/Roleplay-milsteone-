@@ -31,7 +31,9 @@ data class AppSettings(
     /** After each reply, ask the model for new durable facts and save them as memories. */
     val autoMemory: Boolean = true,
     /** File name (in the app image folder) of the custom chat background; blank for none. */
-    val chatBackground: String = ""
+    val chatBackground: String = "",
+    /** Writing mode sends at most this many of the latest words; 0 sends the whole document. */
+    val writingContextWords: Int = 0
 )
 
 class SettingsStore(private val context: Context) {
@@ -50,6 +52,7 @@ class SettingsStore(private val context: Context) {
         val STREAMING = booleanPreferencesKey("streaming")
         val AUTO_MEMORY = booleanPreferencesKey("auto_memory")
         val CHAT_BACKGROUND = stringPreferencesKey("chat_background")
+        val WRITING_CONTEXT_WORDS = intPreferencesKey("writing_context_words")
     }
 
     private fun read(p: Preferences) = AppSettings(
@@ -65,7 +68,8 @@ class SettingsStore(private val context: Context) {
         contextMessages = p[Keys.CONTEXT_MESSAGES] ?: 30,
         streaming = p[Keys.STREAMING] ?: true,
         autoMemory = p[Keys.AUTO_MEMORY] ?: true,
-        chatBackground = p[Keys.CHAT_BACKGROUND] ?: ""
+        chatBackground = p[Keys.CHAT_BACKGROUND] ?: "",
+        writingContextWords = p[Keys.WRITING_CONTEXT_WORDS] ?: 0
     )
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { read(it) }
@@ -87,6 +91,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.STREAMING] = next.streaming
             p[Keys.AUTO_MEMORY] = next.autoMemory
             p[Keys.CHAT_BACKGROUND] = next.chatBackground
+            p[Keys.WRITING_CONTEXT_WORDS] = next.writingContextWords.coerceAtLeast(0)
         }
     }
 }

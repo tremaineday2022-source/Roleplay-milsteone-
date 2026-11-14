@@ -362,6 +362,20 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
                 }
             )
 
+            SettingsHeader("Writing mode")
+            NumberField(
+                label = "Send at most this many words (0 = whole document)",
+                value = settings.writingContextWords,
+                onChange = { v -> update { it.copy(writingContextWords = v) } }
+            )
+            Text(
+                "Each Continue sends the document again, so long documents cost more every press " +
+                    "(about 4 tokens for every 3 words). A limit sends only the latest words; " +
+                    "the rest of your document is kept, just not sent. 6000 words is a good start.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             SettingsHeader("Lorebook")
             Text(
                 "World info entries with trigger keywords. An entry is added to the prompt only while " +

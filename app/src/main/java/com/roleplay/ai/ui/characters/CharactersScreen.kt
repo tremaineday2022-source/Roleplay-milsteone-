@@ -90,7 +90,11 @@ fun CharactersScreen(
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CharacterAvatar(name = character.name, color = character.avatarColor)
+                            CharacterAvatar(
+                                name = character.name,
+                                color = character.avatarColor,
+                                image = app.repository.images.avatarFile(character)
+                            )
                             Column(
                                 modifier = Modifier
                                     .weight(1f)

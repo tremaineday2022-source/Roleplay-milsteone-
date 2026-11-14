@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
@@ -35,6 +38,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.roleplay.ai.RoleplayApp
 import com.roleplay.ai.data.db.CharacterEntity
+import kotlinx.coroutines.launch
 
 private val Palette = listOf(
     0xFF6750A4, 0xFF7D5260, 0xFF00639B, 0xFF00696E, 0xFF4C662B,
@@ -70,6 +76,20 @@ fun CharacterEditScreen(
     // Kept from the stored card so editing does not reset them.
     var isFavorite by remember { mutableStateOf(false) }
     var createdAt by remember { mutableStateOf<Long?>(null) }
+    // The picture saved on the character, and the one shown in the editor (may be unsaved).
+    var savedPicture by remember { mutableStateOf("") }
+    var picture by rememberSaveable { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    val pictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val name = app.repository.images.importImage(uri, maxSide = 512)
+            if (name != null) {
+                // Discard an earlier unsaved pick; the saved one is only replaced on Save.
+                if (picture.isNotBlank() && picture != savedPicture) app.repository.images.delete(listOf(picture))
+                picture = name
+            }
+        }
+    }
     val generating by viewModel.generating.collectAsStateWithLifecycle()
     var showGenerate by remember { mutableStateOf(false) }
     var generateError by remember { mutableStateOf<String?>(null) }
@@ -86,6 +106,8 @@ fun CharacterEditScreen(
                     greeting = c.greeting
                     avatarColor = c.avatarColor
                     isFavorite = c.isFavorite
+                    savedPicture = c.avatarImage
+                    picture = c.avatarImage
                     createdAt = c.createdAt
                 }
                 loaded = true
@@ -119,9 +141,13 @@ fun CharacterEditScreen(
                                         exampleDialogue = exampleDialogue,
                                         greeting = greeting,
                                         isFavorite = isFavorite,
-                                        createdAt = createdAt ?: System.currentTimeMillis()
+                                        createdAt = createdAt ?: System.currentTimeMillis(),
+                                        avatarImage = picture
                                     )
                                 )
+                                if (savedPicture.isNotBlank() && savedPicture != picture) {
+                                    app.repository.images.delete(listOf(savedPicture))
+                                }
                                 onBack()
                             }
                         },
@@ -167,7 +193,33 @@ fun CharacterEditScreen(
                 singleLine = true
             )
 
-            Text("Avatar color", style = MaterialTheme.typography.labelLarge)
+            Text("Picture", style = MaterialTheme.typography.labelLarge)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CharacterAvatar(
+                    name = name.ifBlank { "?" },
+                    color = avatarColor,
+                    size = 56.dp,
+                    image = picture.takeIf { app.repository.images.exists(it) }?.let { app.repository.images.file(it) }
+                )
+                OutlinedButton(
+                    onClick = {
+                        pictureLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    enabled = loaded
+                ) { Text(if (picture.isBlank()) "Add picture" else "Change picture") }
+                if (picture.isNotBlank()) {
+                    TextButton(onClick = {
+                        if (picture != savedPicture) app.repository.images.delete(listOf(picture))
+                        picture = ""
+                    }) { Text("Remove") }
+                }
+            }
+
+            Text("Avatar color (shown when there is no picture)", style = MaterialTheme.typography.labelLarge)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

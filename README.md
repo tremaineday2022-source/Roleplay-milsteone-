@@ -20,6 +20,10 @@ An Android app for AI roleplay chats. Works with **any OpenAI-compatible API** (
 - **Lorebook / world info** — entries with trigger keywords. An entry is added to the system prompt only while one of its keywords appears (case-insensitively) in the recent messages or the document.
 - **Auto-memory** — after each reply, one background request extracts up to 3 new durable facts into that chat's Memories, skipping ones already saved. Toggle in Settings (on by default).
 - **Images** — attach photos to a message (sent to vision models as `image_url` parts, copied into app storage, shown in the bubble), and set a custom, dimmed chat background in Settings.
+- **Character pictures** — add a profile picture to any character in the editor; it replaces the letter avatar everywhere.
+- **Per-chat notes** — an author's note for one chat or document (note icon in the top bar). It is sent with every request, just before the latest message, and shown as a strip under the top bar.
+- **Token counter** — under the message box, how many tokens the last request sent and received. Uses the provider's real counts when it reports them, otherwise an estimate (≈).
+- **Writing-mode limit** — Settings → Writing mode: send only the latest N words instead of the whole document, to keep long documents cheap.
 - **Generate with AI** — in the character editor, turn a short description into a full character card.
 - **Backup / restore** — export or import characters, chats, documents, messages, memories and the lorebook as one JSON file (Settings). Settings, the API key and attached photos are not included.
 
@@ -61,7 +65,7 @@ Requirements: JDK 17+, Android SDK 35, minSdk 26 (Android 8.0+).
 
 ## Database changes
 
-The database is at version 2. Existing installs are upgraded by `AppDatabase.MIGRATION_1_2`; `MigrationTest` builds a version-1 database from the exported schema in `app/schemas/` and checks that every chat survives. When the schema changes again, bump the version, add a new `Migration`, commit the newly exported schema file, and never use destructive migration.
+The database is at version 3. Existing installs are upgraded by `AppDatabase.MIGRATION_1_2` and `MIGRATION_2_3` (`ALL_MIGRATIONS`); `MigrationTest` builds version-1 and version-2 databases from the exported schemas in `app/schemas/` and checks that every chat survives. When the schema changes again, bump the version, add a new `Migration`, commit the newly exported schema file, and never use destructive migration.
 
 ## First run
 

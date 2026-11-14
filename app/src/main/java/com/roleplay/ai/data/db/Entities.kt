@@ -19,7 +19,9 @@ data class CharacterEntity(
     val exampleDialogue: String = "",
     val greeting: String = "",
     val isFavorite: Boolean = false,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /** File name of the profile picture in the app image folder; blank for the letter avatar. */
+    val avatarImage: String = ""
 )
 
 @Serializable
@@ -38,7 +40,9 @@ data class SessionEntity(
     /** The freeform text of a writing-mode session. */
     val document: String = "",
     /** Comma-separated character ids of a group chat; empty for one-on-one chats. */
-    val characterIds: String = ""
+    val characterIds: String = "",
+    /** Author's note for this chat or document, kept close to the latest messages. */
+    val note: String = ""
 ) {
     companion object {
         const val MODE_CHAT = "chat"

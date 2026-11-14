@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.roleplay.ai.RoleplayApp
+import com.roleplay.ai.data.api.Usage
 import com.roleplay.ai.data.db.CharacterEntity
 import com.roleplay.ai.data.db.JsonList
 import com.roleplay.ai.data.db.MemoryEntity
@@ -14,6 +15,7 @@ import com.roleplay.ai.data.prefs.AppSettings
 import com.roleplay.ai.data.prefs.SettingsStore
 import com.roleplay.ai.data.repo.ChatRepository
 import com.roleplay.ai.data.repo.ReplyKind
+import com.roleplay.ai.domain.TokenEstimate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -26,6 +28,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Tokens of the last request: an estimate until the provider reports the real counts. */
+data class TokenUsage(val sent: Int, val received: Int?, val exact: Boolean)
 
 /** A reply being generated: what it is for, which message it targets, and the text so far. */
 data class Generation(val kind: ReplyKind, val targetId: Long?, val text: String)
@@ -54,6 +59,9 @@ class ChatViewModel(
     private val _pendingImages = MutableStateFlow<List<String>>(emptyList())
     /** Photos attached to the message being written, already copied into app storage. */
     val pendingImages: StateFlow<List<String>> = _pendingImages.asStateFlow()
+
+    private val _tokens = MutableStateFlow<TokenUsage?>(null)
+    val tokens: StateFlow<TokenUsage?> = _tokens.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -130,6 +138,10 @@ class ChatViewModel(
         viewModelScope.launch { repo.deleteMessage(message) }
     }
 
+    fun saveNote(note: String) {
+        viewModelScope.launch { repo.updateNote(sessionId, note) }
+    }
+
     fun pinMemory(content: String) {
         viewModelScope.launch {
             repo.saveMemory(MemoryEntity(sessionId = sessionId, content = content.trim()))
@@ -173,7 +185,11 @@ class ChatViewModel(
                 _generation.value = Generation(kind, targetId, "")
                 _error.value = null
                 val request = repo.chatRequest(session, history, loadedSettings, continueLast = kind == ReplyKind.CONTINUE)
-                repo.stream(repo.toApiConfig(loadedSettings), request).collect { delta ->
+                _tokens.value = TokenUsage(TokenEstimate.request(request), null, exact = false)
+                val onUsage: (Usage) -> Unit = { usage ->
+                    _tokens.value = TokenUsage(usage.promptTokens, usage.completionTokens, exact = true)
+                }
+                repo.stream(repo.toApiConfig(loadedSettings), request, onUsage).collect { delta ->
                     builder.append(delta)
                     _generation.value = Generation(kind, targetId, builder.toString())
                 }
