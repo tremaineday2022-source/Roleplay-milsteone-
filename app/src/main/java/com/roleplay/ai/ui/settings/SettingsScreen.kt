@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -50,11 +51,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.roleplay.ai.RoleplayApp
 import com.roleplay.ai.data.prefs.AppSettings
 import com.roleplay.ai.data.prefs.ThemeMode
 import com.roleplay.ai.ui.AppViewModel
+import com.roleplay.ai.ui.ConnectionState
 import com.roleplay.ai.ui.common.FileImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -82,7 +83,9 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
     val viewModel: AppViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = AppViewModel.factory(app)
     )
-    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    // The on-screen copy, which reflects typing immediately (see AppViewModel.draft).
+    val settings = viewModel.draft
+    val loaded = viewModel.loaded
     var showKey by remember { mutableStateOf(false) }
 
     fun update(transform: (AppSettings) -> AppSettings) = viewModel.update(transform)
@@ -192,11 +195,13 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
                 }
             }
 
+            val shortenedKey = "..." in settings.apiKey || "…" in settings.apiKey
             OutlinedTextField(
                 value = settings.baseUrl,
                 onValueChange = { v -> update { it.copy(baseUrl = v) } },
                 label = { Text("Base URL") },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = loaded,
                 singleLine = true
             )
             OutlinedTextField(
@@ -204,7 +209,17 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
                 onValueChange = { v -> update { it.copy(apiKey = v) } },
                 label = { Text("API key") },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = loaded,
                 singleLine = true,
+                isError = shortenedKey,
+                supportingText = if (shortenedKey) {
+                    {
+                        Text(
+                            "This looks like a shortened key (it contains \"...\"). Providers show " +
+                                "the full key only once, when it is created. Paste the full key."
+                        )
+                    }
+                } else null,
                 visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { showKey = !showKey }) {
@@ -220,8 +235,40 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
                 onValueChange = { v -> update { it.copy(model = v) } },
                 label = { Text("Model") },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = loaded,
                 singleLine = true
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                val testing = viewModel.connection == ConnectionState.Testing
+                Button(onClick = viewModel::testConnection, enabled = loaded && !testing) {
+                    Text("Test connection")
+                }
+                if (testing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+            when (val state = viewModel.connection) {
+                is ConnectionState.Connected -> Text(
+                    "Connected. ${state.model} answered, so chats will work.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                is ConnectionState.Failed -> Text(
+                    "Not connected. ${state.message}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+                ConnectionState.Testing -> Text("Testing…", style = MaterialTheme.typography.bodySmall)
+                ConnectionState.Idle -> Text(
+                    "Everything here saves by itself as you type, so there is no Connect button. " +
+                        "Tap Test connection to check that your key works.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -307,6 +354,7 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
                 onValueChange = { v -> update { it.copy(globalInstructions = v) } },
                 label = { Text("Global instructions (applied to every chat)") },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = loaded,
                 minLines = 4,
                 maxLines = 10,
                 placeholder = {

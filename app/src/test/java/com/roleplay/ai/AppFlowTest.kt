@@ -21,6 +21,8 @@ import com.roleplay.ai.data.prefs.AppSettings
 import com.roleplay.ai.data.prefs.SettingsStore
 import com.roleplay.ai.data.repo.ChatRepository
 import com.roleplay.ai.domain.PromptBuilder
+import com.roleplay.ai.ui.AppViewModel
+import com.roleplay.ai.ui.ConnectionState
 import com.roleplay.ai.ui.chat.ChatViewModel
 import com.roleplay.ai.ui.writing.WritingViewModel
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +92,7 @@ class AppFlowTest {
     @Volatile private var characterReply = "{}"
     @Volatile private var writingReply = " and the story went on."
     @Volatile private var slowChat = false
+    @Volatile private var failWith: Int? = null
 
     private val mira = CharacterEntity(name = "Mira", tagline = "A thief", persona = "A sly thief.", greeting = "Well, hello.")
     private val bron = CharacterEntity(name = "Bron", persona = "A gruff smith.", greeting = "Hmph.")
@@ -103,6 +106,10 @@ class AppFlowTest {
                 val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
                 val call = Sent(request.getHeader("Authorization"), body)
                 sent += call
+                failWith?.let { code ->
+                    return MockResponse().setResponseCode(code)
+                        .setBody("{\"error\":{\"message\":\"No auth credentials found\"}}")
+                }
                 val text = when {
                     "long-term memory of a roleplay" in call.system -> memoryReply
                     "character cards" in call.system -> characterReply
@@ -124,6 +131,9 @@ class AppFlowTest {
 
     @After
     fun tearDown() {
+        // Settings writes started by a view model must finish while the test's main dispatcher
+        // is still installed; a write left pending would block the next test's set-up.
+        runBlocking { store.update { it } }
         db.close()
         server.shutdown()
         Dispatchers.resetMain()
@@ -286,6 +296,65 @@ class AppFlowTest {
         val failure = runCatching { runBlocking { repo.generateCharacter("a pirate", settings) } }.exceptionOrNull()
         assertEquals("No API key configured. Add one in Settings.", failure?.message)
         assertTrue(sent.isEmpty())
+    }
+
+    // ---- Settings screen ----
+
+    @Test
+    fun typingInSettingsShowsEveryLetterImmediatelyAndSavesTheWholeText() {
+        val vm = AppViewModel(store, repo)
+        eventually("settings loaded") { vm.loaded }
+
+        // Type one letter at a time, as a keyboard does, without waiting for the save to finish.
+        val phrase = "write a roleplay"
+        for (length in 1..phrase.length) {
+            val typed = phrase.take(length)
+            vm.update { it.copy(globalInstructions = typed) }
+            assertEquals("the field must show exactly what was typed", typed, vm.draft.globalInstructions)
+        }
+        eventually("saved in full") { store.settings.first().globalInstructions == phrase }
+
+        // The same for the API key and model, which the store also trims when saving.
+        val key = "sk-or-v1-0123456789abcdef"
+        for (length in 1..key.length) vm.update { it.copy(apiKey = key.take(length)) }
+        vm.update { it.copy(model = "openrouter/auto ") }
+        assertEquals(key, vm.draft.apiKey)
+        assertEquals("openrouter/auto ", vm.draft.model)
+        eventually("key and model saved") {
+            store.settings.first().let { it.apiKey == key && it.model == "openrouter/auto" }
+        }
+        // Nothing typed was lost or reordered on the way to disk.
+        assertEquals(phrase, runBlocking { store.settings.first() }.globalInstructions)
+    }
+
+    @Test
+    fun testConnectionReportsSuccessAndExplainsARejectedKey() {
+        val vm = AppViewModel(store, repo)
+        eventually("settings loaded") { vm.loaded }
+        assertEquals(ConnectionState.Idle, vm.connection)
+
+        vm.testConnection()
+        eventually("connected") { vm.connection == ConnectionState.Connected("test-model") }
+        assertEquals("Bearer test-key", sent.last().auth)
+        assertFalse(sent.last().stream)
+
+        failWith = 401
+        vm.testConnection()
+        eventually("failed") { vm.connection is ConnectionState.Failed }
+        val message = (vm.connection as ConnectionState.Failed).message
+        assertTrue(message, message.startsWith("The API key was rejected."))
+        assertTrue(message, "No auth credentials found" in message)
+
+        // Editing a setting clears the old result.
+        vm.update { it.copy(apiKey = "another-key") }
+        assertEquals(ConnectionState.Idle, vm.connection)
+
+        // A blank key for a remote server is reported without sending anything.
+        val before = sent.size
+        vm.update { it.copy(baseUrl = "https://openrouter.ai/api/v1", apiKey = "") }
+        vm.testConnection()
+        eventually("key missing") { vm.connection == ConnectionState.Failed("No API key configured. Add one in Settings.") }
+        assertEquals(before, sent.size)
     }
 
     // ---- 3. Group chats ----
