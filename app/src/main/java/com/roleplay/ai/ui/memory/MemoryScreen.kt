@@ -114,7 +114,8 @@ fun MemoryScreen(
                 .padding(16.dp)
         ) {
             Text(
-                "Memories are injected into every request for this chat.",
+                "Memories are added to every request for this chat or document. With auto-memory on, " +
+                    "new facts are also saved here after each reply.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

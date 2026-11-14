@@ -11,18 +11,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,8 +38,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.roleplay.ai.RoleplayApp
 import com.roleplay.ai.data.db.CharacterEntity
@@ -59,6 +67,12 @@ fun CharacterEditScreen(
     var greeting by remember { mutableStateOf("") }
     var avatarColor by remember { mutableStateOf(Palette.first()) }
     var loaded by remember { mutableStateOf(false) }
+    // Kept from the stored card so editing does not reset them.
+    var isFavorite by remember { mutableStateOf(false) }
+    var createdAt by remember { mutableStateOf<Long?>(null) }
+    val generating by viewModel.generating.collectAsStateWithLifecycle()
+    var showGenerate by remember { mutableStateOf(false) }
+    var generateError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(characterId) {
         if (characterId > 0) {
@@ -71,6 +85,8 @@ fun CharacterEditScreen(
                     exampleDialogue = c.exampleDialogue
                     greeting = c.greeting
                     avatarColor = c.avatarColor
+                    isFavorite = c.isFavorite
+                    createdAt = c.createdAt
                 }
                 loaded = true
             }
@@ -101,7 +117,9 @@ fun CharacterEditScreen(
                                         persona = persona,
                                         description = description,
                                         exampleDialogue = exampleDialogue,
-                                        greeting = greeting
+                                        greeting = greeting,
+                                        isFavorite = isFavorite,
+                                        createdAt = createdAt ?: System.currentTimeMillis()
                                     )
                                 )
                                 onBack()
@@ -123,6 +141,17 @@ fun CharacterEditScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            OutlinedButton(
+                onClick = {
+                    generateError = null
+                    showGenerate = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = loaded
+            ) {
+                Icon(Icons.Filled.AutoAwesome, contentDescription = null)
+                Text("Generate with AI", modifier = Modifier.padding(start = 8.dp))
+            }
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -149,7 +178,9 @@ fun CharacterEditScreen(
                     Box(
                         modifier = Modifier
                             .size(36.dp)
-                            .background(Color(c), CircleShape),
+                            .clip(CircleShape)
+                            .background(Color(c))
+                            .clickable { avatarColor = c },
                         contentAlignment = Alignment.Center
                     ) {
                         if (c == avatarColor) {
@@ -196,5 +227,66 @@ fun CharacterEditScreen(
                 maxLines = 6
             )
         }
+    }
+
+    if (showGenerate) {
+        var idea by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { if (!generating) showGenerate = false },
+            title = { Text("Generate with AI") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Describe the character in a sentence or two. The fields below are filled in " +
+                            "for you to review and edit; nothing is saved until you tap the check mark.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = idea,
+                        onValueChange = { idea = it },
+                        label = { Text("Short description") },
+                        placeholder = { Text("e.g. a sarcastic ship AI who secretly cares about her crew") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 6,
+                        enabled = !generating
+                    )
+                    if (generating) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text("Writing the card…", modifier = Modifier.padding(start = 10.dp))
+                        }
+                    }
+                    generateError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        generateError = null
+                        viewModel.generateCharacter(
+                            idea = idea,
+                            onDraft = { draft ->
+                                if (draft.name.isNotBlank()) name = draft.name
+                                tagline = draft.tagline
+                                persona = draft.persona
+                                description = draft.description
+                                exampleDialogue = draft.exampleDialogue
+                                greeting = draft.greeting
+                                showGenerate = false
+                            },
+                            onError = { generateError = it }
+                        )
+                    },
+                    enabled = idea.isNotBlank() && !generating
+                ) { Text("Generate") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGenerate = false }, enabled = !generating) { Text("Cancel") }
+            }
+        )
     }
 }

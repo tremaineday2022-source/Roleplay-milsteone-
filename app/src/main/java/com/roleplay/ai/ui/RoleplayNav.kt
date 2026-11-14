@@ -27,8 +27,10 @@ import com.roleplay.ai.ui.characters.CharacterEditScreen
 import com.roleplay.ai.ui.characters.CharactersScreen
 import com.roleplay.ai.ui.chat.ChatScreen
 import com.roleplay.ai.ui.chatlist.ChatListScreen
+import com.roleplay.ai.ui.lorebook.LorebookScreen
 import com.roleplay.ai.ui.memory.MemoryScreen
 import com.roleplay.ai.ui.settings.SettingsScreen
+import com.roleplay.ai.ui.writing.WritingScreen
 
 object Routes {
     const val CHATS = "chats"
@@ -37,10 +39,13 @@ object Routes {
     const val CHAT = "chat/{sessionId}"
     const val CHARACTER_EDIT = "character/edit?characterId={characterId}"
     const val MEMORY = "memory/{sessionId}"
+    const val WRITING = "writing/{sessionId}"
+    const val LOREBOOK = "lorebook"
 
     fun chat(sessionId: Long) = "chat/$sessionId"
     fun characterEdit(characterId: Long = 0L) = "character/edit?characterId=$characterId"
     fun memory(sessionId: Long) = "memory/$sessionId"
+    fun writing(sessionId: Long) = "writing/$sessionId"
 }
 
 @Composable
@@ -85,6 +90,7 @@ fun RoleplayNav(app: RoleplayApp) {
                 ChatListScreen(
                     app = app,
                     onOpenChat = { navController.navigate(Routes.chat(it)) },
+                    onOpenWriting = { navController.navigate(Routes.writing(it)) },
                     onGoToCharacters = { navController.navigateTab(Routes.CHARACTERS) }
                 )
             }
@@ -98,7 +104,7 @@ fun RoleplayNav(app: RoleplayApp) {
                 )
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(app = app)
+                SettingsScreen(app = app, onOpenLorebook = { navController.navigate(Routes.LOREBOOK) })
             }
             composable(
                 Routes.CHAT,
@@ -109,8 +115,25 @@ fun RoleplayNav(app: RoleplayApp) {
                     app = app,
                     sessionId = sessionId,
                     onBack = { navController.popBackStack() },
-                    onOpenMemories = { navController.navigate(Routes.memory(sessionId)) }
+                    onOpenMemories = { navController.navigate(Routes.memory(sessionId)) },
+                    onOpenLorebook = { navController.navigate(Routes.LOREBOOK) }
                 )
+            }
+            composable(
+                Routes.WRITING,
+                arguments = listOf(navArgument("sessionId") { type = NavType.LongType })
+            ) { entry ->
+                val sessionId = entry.arguments?.getLong("sessionId") ?: 0L
+                WritingScreen(
+                    app = app,
+                    sessionId = sessionId,
+                    onBack = { navController.popBackStack() },
+                    onOpenMemories = { navController.navigate(Routes.memory(sessionId)) },
+                    onOpenLorebook = { navController.navigate(Routes.LOREBOOK) }
+                )
+            }
+            composable(Routes.LOREBOOK) {
+                LorebookScreen(app = app, onBack = { navController.popBackStack() })
             }
             composable(
                 Routes.CHARACTER_EDIT,

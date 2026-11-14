@@ -1,5 +1,9 @@
 package com.roleplay.ai.ui.settings
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -7,31 +11,42 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -40,6 +55,14 @@ import com.roleplay.ai.RoleplayApp
 import com.roleplay.ai.data.prefs.AppSettings
 import com.roleplay.ai.data.prefs.ThemeMode
 import com.roleplay.ai.ui.AppViewModel
+import com.roleplay.ai.ui.common.FileImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private data class ProviderPreset(val name: String, val baseUrl: String, val model: String)
 
@@ -55,7 +78,7 @@ private val Presets = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(app: RoleplayApp) {
+fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
     val viewModel: AppViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = AppViewModel.factory(app)
     )
@@ -64,8 +87,76 @@ fun SettingsScreen(app: RoleplayApp) {
 
     fun update(transform: (AppSettings) -> AppSettings) = viewModel.update(transform)
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var busy by remember { mutableStateOf(false) }
+    var importUri by remember { mutableStateOf<Uri?>(null) }
+
+    val backgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val previous = settings.chatBackground
+            val name = app.repository.images.importImage(uri, maxSide = 2048)
+            if (name == null) {
+                snackbarHostState.showSnackbar("That image could not be read.")
+            } else {
+                update { it.copy(chatBackground = name) }
+                if (previous.isNotBlank()) app.repository.images.delete(listOf(previous))
+            }
+        }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) scope.launch {
+            busy = true
+            val message = try {
+                withContext(Dispatchers.IO) {
+                    val json = app.backupManager.export()
+                    val stream = context.contentResolver.openOutputStream(uri, "wt")
+                        ?: throw IOException("Could not open the file for writing.")
+                    stream.use { it.write(json.toByteArray()) }
+                }
+                "Backup saved."
+            } catch (e: Exception) {
+                "Export failed: ${e.message ?: "unknown error"}"
+            } finally {
+                busy = false
+            }
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        importUri = uri
+    }
+
+    fun runImport(uri: Uri, replace: Boolean) {
+        scope.launch {
+            busy = true
+            val message = try {
+                val result = withContext(Dispatchers.IO) {
+                    val text = context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: throw IOException("Could not open the file.")
+                    app.backupManager.import(text, replace).also {
+                        if (replace) app.repository.sweepOrphanImages(keep = setOf(settings.chatBackground))
+                    }
+                }
+                "Imported ${result.characters} characters, ${result.sessions} chats and documents, " +
+                    "${result.messages} messages, ${result.memories} memories, ${result.lorebook} lorebook entries."
+            } catch (e: Exception) {
+                "Import failed: ${e.message ?: "unknown error"}"
+            } finally {
+                busy = false
+            }
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Settings") }) }
+        topBar = { TopAppBar(title = { Text("Settings") }) },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -174,6 +265,42 @@ fun SettingsScreen(app: RoleplayApp) {
                 }
             }
 
+            Text("Chat background", style = MaterialTheme.typography.labelLarge)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val hasBackground = settings.chatBackground.isNotBlank()
+                if (hasBackground) {
+                    FileImage(
+                        file = app.repository.images.file(settings.chatBackground),
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        maxSidePx = 256,
+                        contentDescription = "Current chat background"
+                    )
+                }
+                OutlinedButton(onClick = {
+                    backgroundPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }) { Text(if (hasBackground) "Change image" else "Choose image") }
+                if (hasBackground) {
+                    TextButton(onClick = {
+                        val previous = settings.chatBackground
+                        update { it.copy(chatBackground = "") }
+                        app.repository.images.delete(listOf(previous))
+                    }) { Text("Remove") }
+                }
+            }
+            Text(
+                "Shown dimmed behind the messages in every chat.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             SettingsHeader("Custom prompt instructions")
             OutlinedTextField(
                 value = settings.globalInstructions,
@@ -187,7 +314,27 @@ fun SettingsScreen(app: RoleplayApp) {
                 }
             )
 
+            SettingsHeader("Lorebook")
+            Text(
+                "World info entries with trigger keywords. An entry is added to the prompt only while " +
+                    "one of its keywords appears in the recent messages or the document.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = onOpenLorebook) { Text("Manage lorebook") }
+
             SettingsHeader("Memory extension")
+            SettingsSwitch(
+                title = "Auto-save new facts as memories",
+                checked = settings.autoMemory,
+                onChange = { v -> update { it.copy(autoMemory = v) } }
+            )
+            Text(
+                "After each reply, one extra background request picks out up to 3 new lasting facts " +
+                    "and adds them to that chat's Memories. Facts already saved are skipped.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             SettingsSwitch(
                 title = "Auto-summarize long conversations",
                 checked = settings.autoSummary,
@@ -217,7 +364,60 @@ fun SettingsScreen(app: RoleplayApp) {
                 checked = settings.streaming,
                 onChange = { v -> update { it.copy(streaming = v) } }
             )
+
+            SettingsHeader("Backup & restore")
+            Text(
+                "Saves characters, chats, documents, messages, memories and the lorebook to one JSON " +
+                    "file. Settings, the API key and attached photos are not included.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    onClick = {
+                        val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+                        exportLauncher.launch("roleplay-ai-backup-$date.json")
+                    },
+                    enabled = !busy
+                ) { Text("Export") }
+                OutlinedButton(
+                    onClick = {
+                        importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                    },
+                    enabled = !busy
+                ) { Text("Import") }
+                if (busy) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
         }
+    }
+
+    importUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { importUri = null },
+            title = { Text("Import backup") },
+            text = {
+                Text(
+                    "Add the backup next to what is already in the app, or replace everything? " +
+                        "Replacing permanently deletes your current characters, chats, documents, " +
+                        "memories and lorebook first."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    importUri = null
+                    runImport(uri, replace = false)
+                }) { Text("Add to existing") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { importUri = null }) { Text("Cancel") }
+                    TextButton(onClick = {
+                        importUri = null
+                        runImport(uri, replace = true)
+                    }) { Text("Replace all", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        )
     }
 }
 

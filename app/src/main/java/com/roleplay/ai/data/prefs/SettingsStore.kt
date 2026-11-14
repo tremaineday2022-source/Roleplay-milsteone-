@@ -27,7 +27,11 @@ data class AppSettings(
     val autoSummary: Boolean = true,
     val summaryThreshold: Int = 24,
     val contextMessages: Int = 30,
-    val streaming: Boolean = true
+    val streaming: Boolean = true,
+    /** After each reply, ask the model for new durable facts and save them as memories. */
+    val autoMemory: Boolean = true,
+    /** File name (in the app image folder) of the custom chat background; blank for none. */
+    val chatBackground: String = ""
 )
 
 class SettingsStore(private val context: Context) {
@@ -44,39 +48,31 @@ class SettingsStore(private val context: Context) {
         val SUMMARY_THRESHOLD = intPreferencesKey("summary_threshold")
         val CONTEXT_MESSAGES = intPreferencesKey("context_messages")
         val STREAMING = booleanPreferencesKey("streaming")
+        val AUTO_MEMORY = booleanPreferencesKey("auto_memory")
+        val CHAT_BACKGROUND = stringPreferencesKey("chat_background")
     }
 
-    val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
-        AppSettings(
-            baseUrl = p[Keys.BASE_URL] ?: AppSettings().baseUrl,
-            apiKey = p[Keys.API_KEY] ?: "",
-            model = p[Keys.MODEL] ?: AppSettings().model,
-            temperature = p[Keys.TEMPERATURE] ?: AppSettings().temperature,
-            maxTokens = p[Keys.MAX_TOKENS] ?: AppSettings().maxTokens,
-            themeMode = ThemeMode.entries.getOrElse(p[Keys.THEME_MODE] ?: 0) { ThemeMode.SYSTEM },
-            globalInstructions = p[Keys.GLOBAL_INSTRUCTIONS] ?: "",
-            autoSummary = p[Keys.AUTO_SUMMARY] ?: true,
-            summaryThreshold = p[Keys.SUMMARY_THRESHOLD] ?: 24,
-            contextMessages = p[Keys.CONTEXT_MESSAGES] ?: 30,
-            streaming = p[Keys.STREAMING] ?: true
-        )
-    }
+    private fun read(p: Preferences) = AppSettings(
+        baseUrl = p[Keys.BASE_URL] ?: AppSettings().baseUrl,
+        apiKey = p[Keys.API_KEY] ?: "",
+        model = p[Keys.MODEL] ?: AppSettings().model,
+        temperature = p[Keys.TEMPERATURE] ?: AppSettings().temperature,
+        maxTokens = p[Keys.MAX_TOKENS] ?: AppSettings().maxTokens,
+        themeMode = ThemeMode.entries.getOrElse(p[Keys.THEME_MODE] ?: 0) { ThemeMode.SYSTEM },
+        globalInstructions = p[Keys.GLOBAL_INSTRUCTIONS] ?: "",
+        autoSummary = p[Keys.AUTO_SUMMARY] ?: true,
+        summaryThreshold = p[Keys.SUMMARY_THRESHOLD] ?: 24,
+        contextMessages = p[Keys.CONTEXT_MESSAGES] ?: 30,
+        streaming = p[Keys.STREAMING] ?: true,
+        autoMemory = p[Keys.AUTO_MEMORY] ?: true,
+        chatBackground = p[Keys.CHAT_BACKGROUND] ?: ""
+    )
+
+    val settings: Flow<AppSettings> = context.dataStore.data.map { read(it) }
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         context.dataStore.edit { p ->
-            val current = AppSettings(
-                baseUrl = p[Keys.BASE_URL] ?: AppSettings().baseUrl,
-                apiKey = p[Keys.API_KEY] ?: "",
-                model = p[Keys.MODEL] ?: AppSettings().model,
-                temperature = p[Keys.TEMPERATURE] ?: AppSettings().temperature,
-                maxTokens = p[Keys.MAX_TOKENS] ?: AppSettings().maxTokens,
-                themeMode = ThemeMode.entries.getOrElse(p[Keys.THEME_MODE] ?: 0) { ThemeMode.SYSTEM },
-                globalInstructions = p[Keys.GLOBAL_INSTRUCTIONS] ?: "",
-                autoSummary = p[Keys.AUTO_SUMMARY] ?: true,
-                summaryThreshold = p[Keys.SUMMARY_THRESHOLD] ?: 24,
-                contextMessages = p[Keys.CONTEXT_MESSAGES] ?: 30,
-                streaming = p[Keys.STREAMING] ?: true
-            )
+            val current = read(p)
             val next = transform(current)
             p[Keys.BASE_URL] = next.baseUrl.trim().trimEnd('/')
             p[Keys.API_KEY] = next.apiKey.trim()
@@ -89,6 +85,8 @@ class SettingsStore(private val context: Context) {
             p[Keys.SUMMARY_THRESHOLD] = next.summaryThreshold
             p[Keys.CONTEXT_MESSAGES] = next.contextMessages
             p[Keys.STREAMING] = next.streaming
+            p[Keys.AUTO_MEMORY] = next.autoMemory
+            p[Keys.CHAT_BACKGROUND] = next.chatBackground
         }
     }
 }

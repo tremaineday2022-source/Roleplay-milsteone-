@@ -1,45 +1,59 @@
 package com.roleplay.ai.ui.chat
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.roleplay.ai.RoleplayApp
 import com.roleplay.ai.data.db.CharacterEntity
+import com.roleplay.ai.data.db.JsonList
 import com.roleplay.ai.data.db.MemoryEntity
 import com.roleplay.ai.data.db.MessageEntity
+import com.roleplay.ai.data.db.SessionEntity
 import com.roleplay.ai.data.prefs.AppSettings
+import com.roleplay.ai.data.prefs.SettingsStore
 import com.roleplay.ai.data.repo.ChatRepository
+import com.roleplay.ai.data.repo.ReplyKind
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** A reply being generated: what it is for, which message it targets, and the text so far. */
+data class Generation(val kind: ReplyKind, val targetId: Long?, val text: String)
 
 class ChatViewModel(
     private val repo: ChatRepository,
-    private val store: com.roleplay.ai.data.prefs.SettingsStore,
+    private val store: SettingsStore,
     private val sessionId: Long
 ) : ViewModel() {
 
     val messages: StateFlow<List<MessageEntity>> = repo.observeMessages(sessionId)
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    val memories: StateFlow<List<MemoryEntity>> = repo.observeMemories(sessionId)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val session: StateFlow<SessionEntity?> = repo.observeSession(sessionId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val settings: StateFlow<AppSettings> = store.settings
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
-    private val _character = MutableStateFlow<CharacterEntity?>(null)
-    val character: StateFlow<CharacterEntity?> = _character.asStateFlow()
+    private val _characters = MutableStateFlow<List<CharacterEntity>>(emptyList())
+    val characters: StateFlow<List<CharacterEntity>> = _characters.asStateFlow()
 
-    private val _streamingText = MutableStateFlow("")
-    val streamingText: StateFlow<String> = _streamingText.asStateFlow()
+    private val _generation = MutableStateFlow<Generation?>(null)
+    val generation: StateFlow<Generation?> = _generation.asStateFlow()
 
-    private val _generating = MutableStateFlow(false)
-    val generating: StateFlow<Boolean> = _generating.asStateFlow()
+    private val _pendingImages = MutableStateFlow<List<String>>(emptyList())
+    /** Photos attached to the message being written, already copied into app storage. */
+    val pendingImages: StateFlow<List<String>> = _pendingImages.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -48,47 +62,68 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
-            val session = repo.getSession(sessionId) ?: return@launch
-            _character.value = repo.getCharacter(session.characterId)
+            val loaded = repo.getSession(sessionId) ?: return@launch
+            _characters.value = repo.charactersFor(loaded)
         }
+    }
+
+    fun imageFile(name: String) = repo.images.file(name)
+
+    fun attachImages(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val names = repo.importImages(uris)
+            if (names.size < uris.size) _error.value = "Some images could not be read."
+            _pendingImages.update { it + names }
+        }
+    }
+
+    fun removePendingImage(name: String) {
+        _pendingImages.update { it - name }
+        repo.images.delete(listOf(name))
     }
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _generating.value) return
+        val attached = _pendingImages.value
+        if ((trimmed.isEmpty() && attached.isEmpty()) || _generation.value != null) return
+        _pendingImages.value = emptyList()
         viewModelScope.launch {
-            repo.insertMessage(MessageEntity(sessionId = sessionId, role = "user", content = trimmed))
+            repo.insertMessage(
+                MessageEntity(
+                    sessionId = sessionId,
+                    role = "user",
+                    content = trimmed,
+                    images = JsonList.encode(attached)
+                )
+            )
             repo.touchSession(sessionId)
-            generateReply()
+            generate(ReplyKind.NEW)
         }
     }
 
-    fun regenerate() {
-        if (_generating.value) return
-        val lastAssistant = messages.value.lastOrNull { it.role == "assistant" } ?: return
-        viewModelScope.launch {
-            repo.deleteMessage(lastAssistant)
-            generateReply()
-        }
+    /** Asks for a reply to the conversation as it stands (e.g. after a failed request). */
+    fun generateReply() = generate(ReplyKind.NEW)
+
+    /** Generates another variant of the last reply; earlier variants stay available to swipe to. */
+    fun regenerate() = generate(ReplyKind.REGENERATE)
+
+    /** Extends the last reply in place. */
+    fun continueReply() = generate(ReplyKind.CONTINUE)
+
+    fun swipe(message: MessageEntity, delta: Int) {
+        if (_generation.value != null) return
+        viewModelScope.launch { repo.swipeVariant(message.id, delta) }
     }
 
     fun stopGeneration() {
         streamJob?.cancel()
-        val partial = _streamingText.value
-        if (partial.isNotBlank()) {
-            viewModelScope.launch {
-                repo.insertMessage(MessageEntity(sessionId = sessionId, role = "assistant", content = partial))
-                repo.touchSession(sessionId)
-            }
-        }
-        _streamingText.value = ""
-        _generating.value = false
     }
 
     fun dismissError() { _error.value = null }
 
     fun updateMessage(message: MessageEntity, newContent: String) {
-        viewModelScope.launch { repo.updateMessage(message.copy(content = newContent)) }
+        viewModelScope.launch { repo.editMessage(message, newContent) }
     }
 
     fun deleteMessage(message: MessageEntity) {
@@ -101,51 +136,65 @@ class ChatViewModel(
         }
     }
 
-    fun deleteMemory(memory: MemoryEntity) {
-        viewModelScope.launch { repo.deleteMemory(memory) }
-    }
-
-    private suspend fun generateReply() {
-        val character = _character.value ?: return
-        val current = settings.value
-        val session = repo.getSession(sessionId) ?: return
-        if (current.apiKey.isBlank() && !current.baseUrl.contains("localhost") &&
-            !current.baseUrl.contains("127.0.0.1")
-        ) {
-            _error.value = "No API key configured. Add one in Settings."
-            return
-        }
-
-        _generating.value = true
-        _streamingText.value = ""
-        _error.value = null
+    private fun generate(kind: ReplyKind) {
+        if (_generation.value != null) return
+        // Claim the slot synchronously so a double tap cannot start two requests.
+        _generation.value = Generation(kind, null, "")
         streamJob = viewModelScope.launch {
+            val builder = StringBuilder()
+            var targetId: Long? = null
+            var finished = false
+            var current: AppSettings? = null
             try {
-                val systemPrompt = repo.buildPrompt(character, session, memories.value, current)
-                val history = repo.historyMessages(messages.value, systemPrompt, current)
-                val builder = StringBuilder()
-                repo.stream(repo.toApiConfig(current), history).collect { delta ->
+                val loadedSettings = store.settings.first()
+                current = loadedSettings
+                repo.keyError(loadedSettings)?.let {
+                    _error.value = it
+                    return@launch
+                }
+                val session = repo.getSession(sessionId) ?: return@launch
+                // Read from the database, not the UI state, so a just-sent message is never missed.
+                val all = repo.getMessages(sessionId)
+                val last = all.lastOrNull()
+                val history = when (kind) {
+                    ReplyKind.NEW -> all
+                    ReplyKind.REGENERATE -> {
+                        if (last?.role != "assistant" || all.size < 2) return@launch
+                        targetId = last.id
+                        all.dropLast(1)
+                    }
+                    ReplyKind.CONTINUE -> {
+                        if (last?.role != "assistant") return@launch
+                        targetId = last.id
+                        all
+                    }
+                }
+                if (history.isEmpty()) return@launch
+                _generation.value = Generation(kind, targetId, "")
+                _error.value = null
+                val request = repo.chatRequest(session, history, loadedSettings, continueLast = kind == ReplyKind.CONTINUE)
+                repo.stream(repo.toApiConfig(loadedSettings), request).collect { delta ->
                     builder.append(delta)
-                    _streamingText.value = builder.toString()
+                    _generation.value = Generation(kind, targetId, builder.toString())
                 }
-                val full = builder.toString()
-                if (full.isNotBlank()) {
-                    repo.insertMessage(MessageEntity(sessionId = sessionId, role = "assistant", content = full))
-                    repo.touchSession(sessionId)
-                } else {
-                    _error.value = "The model returned an empty response."
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
+                finished = true
+                if (builder.isBlank()) _error.value = "The model returned an empty response."
+            } catch (e: CancellationException) {
+                // Stopped by the user (or the screen closed): whatever arrived so far is kept below.
             } catch (e: Exception) {
                 _error.value = e.message ?: "Request failed"
             } finally {
-                _streamingText.value = ""
-                _generating.value = false
+                withContext(NonCancellable) {
+                    val text = builder.toString()
+                    if (text.isNotBlank()) repo.commitReply(sessionId, kind, targetId, text)
+                    _generation.value = null
+                    val used = current
+                    if (finished && text.isNotBlank() && used != null) {
+                        // Alternative takes of the same turn are not mined for memories again.
+                        repo.afterReply(sessionId, used, extractMemories = kind != ReplyKind.REGENERATE)
+                    }
+                }
             }
-        }
-        streamJob?.invokeOnCompletion {
-            viewModelScope.launch { repo.maybeSummarize(session, current) }
         }
     }
 

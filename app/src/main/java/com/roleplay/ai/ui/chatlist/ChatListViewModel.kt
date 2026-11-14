@@ -26,9 +26,17 @@ class ChatListViewModel(private val repo: ChatRepository) : ViewModel() {
             sessions.map { ChatListItem(it, byId[it.characterId]) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun startChat(character: CharacterEntity, onReady: (Long) -> Unit) {
+    /** One character starts a normal chat; several start a group chat. */
+    fun startChat(characters: List<CharacterEntity>, onReady: (Long) -> Unit) {
+        if (characters.isEmpty()) return
         viewModelScope.launch {
-            onReady(repo.createSession(character))
+            onReady(repo.createSession(characters))
+        }
+    }
+
+    fun startWriting(onReady: (Long) -> Unit) {
+        viewModelScope.launch {
+            onReady(repo.createWritingSession())
         }
     }
 
