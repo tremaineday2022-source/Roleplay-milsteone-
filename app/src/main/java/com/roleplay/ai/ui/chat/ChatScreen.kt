@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
@@ -80,6 +81,9 @@ import com.roleplay.ai.data.db.variantList
 import com.roleplay.ai.data.repo.ReplyKind
 import com.roleplay.ai.domain.TextJoin
 import com.roleplay.ai.ui.characters.CharacterAvatar
+import com.roleplay.ai.ui.characters.avatarFile
+import com.roleplay.ai.ui.common.NoteDialog
+import com.roleplay.ai.ui.common.NoteStrip
 import com.roleplay.ai.ui.common.FileImage
 import com.roleplay.ai.ui.common.roleplayText
 import java.io.File
@@ -101,6 +105,8 @@ fun ChatScreen(
     val pendingImages by viewModel.pendingImages.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val tokens by viewModel.tokens.collectAsStateWithLifecycle()
+    var editingNote by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -152,7 +158,12 @@ fun ChatScreen(
                                 )
                             }
                         } else {
-                            CharacterAvatar(name = character?.name ?: "…", color = character?.avatarColor, size = 32.dp)
+                            CharacterAvatar(
+                                name = character?.name ?: "…",
+                                color = character?.avatarColor,
+                                size = 32.dp,
+                                image = app.repository.images.avatarFile(character)
+                            )
                         }
                         Column(modifier = Modifier.padding(start = 10.dp)) {
                             Text(
@@ -180,6 +191,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { editingNote = true }) {
+                        Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = "Chat note")
+                    }
                     IconButton(onClick = onOpenLorebook) {
                         Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Lorebook")
                     }
@@ -197,13 +211,14 @@ fun ChatScreen(
                 .padding(padding)
         ) {
             val background = settings.chatBackground.takeIf { it.isNotBlank() }?.let { viewModel.imageFile(it) }
-            if (background != null && background.isFile) {
-                FileImage(file = background, modifier = Modifier.fillMaxSize(), maxSidePx = 2048)
-                // Dim the picture so the bubbles stay readable in both themes.
+            val hasBackground = background != null && background.isFile
+            if (background != null && hasBackground) {
+                FileImage(file = background, modifier = Modifier.fillMaxSize(), maxSidePx = 1600)
+                // A light scrim keeps text readable without hiding the picture.
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f))
+                        .background(MaterialTheme.colorScheme.background.copy(alpha = BACKGROUND_SCRIM))
                 )
             }
 
@@ -212,6 +227,9 @@ fun ChatScreen(
                     .fillMaxSize()
                     .imePadding()
             ) {
+                session?.note?.takeIf { it.isNotBlank() }?.let { note ->
+                    NoteStrip(note = note, onClick = { editingNote = true })
+                }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -234,6 +252,7 @@ fun ChatScreen(
                             },
                             speaker = speaker,
                             streaming = target != null,
+                            translucent = hasBackground,
                             imageFile = viewModel::imageFile,
                             onEdit = if (generating) null else ({ editing = message }),
                             onDelete = if (generating) null else ({ viewModel.deleteMessage(message) }),
@@ -251,14 +270,29 @@ fun ChatScreen(
                                 text = generation?.text.orEmpty(),
                                 speaker = speaker,
                                 streaming = true,
+                                translucent = hasBackground,
                                 imageFile = viewModel::imageFile
                             )
                         }
                     }
                 }
 
-                Surface(tonalElevation = 2.dp) {
+                Surface(
+                    tonalElevation = 2.dp,
+                    color = if (hasBackground) MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                    else MaterialTheme.colorScheme.surface
+                ) {
                     Column {
+                        tokens?.let { usage ->
+                            Text(
+                                tokenLine(usage),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, top = 6.dp)
+                            )
+                        }
                         if (pendingImages.isNotEmpty()) {
                             Row(
                                 modifier = Modifier
@@ -350,6 +384,18 @@ fun ChatScreen(
         )
     }
 
+    if (editingNote) {
+        NoteDialog(
+            initial = session?.note.orEmpty(),
+            forDocument = false,
+            onDismiss = { editingNote = false },
+            onSave = {
+                viewModel.saveNote(it)
+                editingNote = false
+            }
+        )
+    }
+
     pinning?.let { message ->
         AlertDialog(
             onDismissRequest = { pinning = null },
@@ -376,6 +422,7 @@ private fun MessageBubble(
     speaker: String,
     streaming: Boolean,
     imageFile: (String) -> File,
+    translucent: Boolean = false,
     onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onPin: (() -> Unit)? = null,
@@ -396,8 +443,8 @@ private fun MessageBubble(
     ) {
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = if (isUser) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceVariant
+                containerColor = (if (isUser) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant).copy(alpha = if (translucent) 0.88f else 1f)
             ),
             modifier = Modifier
                 .fillMaxWidth(0.85f)
@@ -568,4 +615,14 @@ private fun EditMessageDialog(initial: String, onDismiss: () -> Unit, onSave: (S
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+private const val BACKGROUND_SCRIM = 0.35f
+
+private fun tokenLine(usage: TokenUsage): String {
+    val format = java.text.NumberFormat.getIntegerInstance()
+    val sent = (if (usage.exact) "" else "≈") + format.format(usage.sent) + " tokens sent"
+    val received = usage.received?.let { " · " + format.format(it) + " received" }.orEmpty()
+    val note = if (usage.exact) " (last reply)" else " (estimate, last reply)"
+    return sent + received + note
 }

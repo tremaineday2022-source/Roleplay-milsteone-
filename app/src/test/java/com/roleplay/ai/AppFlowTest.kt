@@ -20,7 +20,10 @@ import com.roleplay.ai.data.files.ImageStore
 import com.roleplay.ai.data.prefs.AppSettings
 import com.roleplay.ai.data.prefs.SettingsStore
 import com.roleplay.ai.data.repo.ChatRepository
+import com.roleplay.ai.domain.DocumentWindow
 import com.roleplay.ai.domain.PromptBuilder
+import com.roleplay.ai.domain.TokenEstimate
+import com.roleplay.ai.ui.chat.TokenUsage
 import com.roleplay.ai.ui.AppViewModel
 import com.roleplay.ai.ui.ConnectionState
 import com.roleplay.ai.ui.chat.ChatViewModel
@@ -67,6 +70,7 @@ private class Sent(val auth: String?, val body: JsonObject) {
     }
     val system: String get() = messages.first().second
     val stream: Boolean get() = body["stream"]!!.jsonPrimitive.content == "true"
+    val wantsUsage: Boolean get() = body["stream_options"] != null
 }
 
 /**
@@ -93,6 +97,7 @@ class AppFlowTest {
     @Volatile private var writingReply = " and the story went on."
     @Volatile private var slowChat = false
     @Volatile private var failWith: Int? = null
+    @Volatile private var rejectStreamOptions = false
 
     private val mira = CharacterEntity(name = "Mira", tagline = "A thief", persona = "A sly thief.", greeting = "Well, hello.")
     private val bron = CharacterEntity(name = "Bron", persona = "A gruff smith.", greeting = "Hmph.")
@@ -106,6 +111,10 @@ class AppFlowTest {
                 val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
                 val call = Sent(request.getHeader("Authorization"), body)
                 sent += call
+                if (rejectStreamOptions && call.wantsUsage) {
+                    return MockResponse().setResponseCode(400)
+                        .setBody("{\"error\":{\"message\":\"Unrecognized request argument supplied: stream_options\"}}")
+                }
                 failWith?.let { code ->
                     return MockResponse().setResponseCode(code)
                         .setBody("{\"error\":{\"message\":\"No auth credentials found\"}}")
@@ -117,7 +126,7 @@ class AppFlowTest {
                     "co-writer" in call.system -> writingReply
                     else -> chatReplies.poll() ?: "Default reply."
                 }
-                return if (call.stream) sse(text, slow = slowChat) else plain(text)
+                return if (call.stream) sse(text, slow = slowChat, usage = call.wantsUsage) else plain(text)
             }
         }
         server.start()
@@ -146,9 +155,10 @@ class AppFlowTest {
 
     private fun quoted(text: String) = JsonPrimitive(text).toString()
 
-    private fun sse(text: String, slow: Boolean): MockResponse {
+    private fun sse(text: String, slow: Boolean, usage: Boolean = false): MockResponse {
         val pieces = text.chunked(maxOf(1, text.length / 3))
         val body = pieces.joinToString("") { "data: {\"choices\":[{\"delta\":{\"content\":${quoted(it)}}}]}\n\n" } +
+            (if (usage) "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1234,\"completion_tokens\":56,\"total_tokens\":1290}}\n\n" else "") +
             "data: [DONE]\n\n"
         return MockResponse().setHeader("Content-Type", "text/event-stream").setBody(body).apply {
             if (slow) throttleBody(48, 400, TimeUnit.MILLISECONDS)
@@ -156,7 +166,10 @@ class AppFlowTest {
     }
 
     private fun plain(text: String) = MockResponse().setHeader("Content-Type", "application/json")
-        .setBody("{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":${quoted(text)}}}]}")
+        .setBody(
+            "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":${quoted(text)}}}]," +
+                "\"usage\":{\"prompt_tokens\":321,\"completion_tokens\":9}}"
+        )
 
     private fun eventually(what: String, condition: suspend () -> Boolean) = runBlocking {
         val deadline = System.currentTimeMillis() + 15_000
@@ -296,6 +309,157 @@ class AppFlowTest {
         val failure = runCatching { runBlocking { repo.generateCharacter("a pirate", settings) } }.exceptionOrNull()
         assertEquals("No API key configured. Add one in Settings.", failure?.message)
         assertTrue(sent.isEmpty())
+    }
+
+    // ---- 1.2.0: writing limit, notes, pictures, token counts ----
+
+    @Test
+    fun writingLimitSendsOnlyTheLatestWordsFromABreak() {
+        val paragraphs = (1..40).joinToString("\n\n") { n -> "Paragraph $n " + "word ".repeat(49).trim() + "." }
+        configure { it.copy(writingContextWords = 300) }
+        val sessionId = runBlocking { repo.createWritingSession().also { repo.saveDocument(it, paragraphs) } }
+        val vm = WritingViewModel(repo, store, sessionId)
+        eventually("loaded") { vm.loaded }
+        writingReply = " The end."
+        vm.continueWriting()
+        eventually("continued") { !vm.generating.value && vm.document.text.endsWith("The end.") }
+
+        val sentDocument = sent.last().messages[1].second
+        assertTrue(sentDocument.startsWith(DocumentWindow.OMITTED_MARKER + "Paragraph "))
+        assertTrue(sentDocument.endsWith("Paragraph 40 " + "word ".repeat(49).trim() + "."))
+        val sentWords = DocumentWindow.wordCount(sentDocument.removePrefix(DocumentWindow.OMITTED_MARKER))
+        assertTrue("sent $sentWords words", sentWords in 250..300)
+        assertFalse("Paragraph 1 " in sentDocument)
+        // The document itself keeps every word.
+        assertTrue(vm.document.text.startsWith("Paragraph 1 "))
+
+        // 0 means the whole document again.
+        configure { it.copy(writingContextWords = 0) }
+        assertEquals(paragraphs, runBlocking { repo.writingRequest(sessionId, paragraphs, settings) }[1].content)
+        // A limit above the length sends everything unchanged.
+        configure { it.copy(writingContextWords = 100_000) }
+        assertEquals(paragraphs, runBlocking { repo.writingRequest(sessionId, paragraphs, settings) }[1].content)
+    }
+
+    @Test
+    fun chatNoteIsSentJustBeforeTheLatestUserMessage() {
+        val sessionId = chatSession(mira)
+        runBlocking { repo.updateNote(sessionId, "  We are on the 2nd layer. Riko is injured.  ") }
+        assertEquals("We are on the 2nd layer. Riko is injured.", runBlocking { repo.getSession(sessionId)!!.note })
+
+        val vm = chatViewModel(sessionId)
+        vm.sendAndAwait(sessionId, "What now?", "We rest.")
+        val roles = sent.last().messages.map { it.first }
+        assertEquals(listOf("system", "assistant", "system", "user"), roles)
+        assertEquals(PromptBuilder.note("We are on the 2nd layer. Riko is injured."), sent.last().messages[2].second)
+
+        // Continue: the note still sits right before the final user turn.
+        chatReplies += "more."
+        vm.continueReply()
+        eventually("continued") { messages(sessionId).last().content.endsWith("more.") }
+        val continued = sent.last().messages
+        assertEquals("system" to PromptBuilder.note("We are on the 2nd layer. Riko is injured."), continued[continued.size - 2])
+        assertEquals("user" to PromptBuilder.CONTINUE_INSTRUCTION, continued.last())
+
+        // Cleared notes are not sent.
+        vm.saveNote("   ")
+        eventually("cleared") { repo.getSession(sessionId)!!.note.isEmpty() }
+        vm.sendAndAwait(sessionId, "And then?", "Then we climb.")
+        assertTrue(sent.last().messages.none { "Author's note" in it.second })
+    }
+
+    @Test
+    fun writingNoteGoesIntoTheSystemPrompt() {
+        val sessionId = runBlocking { repo.createWritingSession().also { repo.updateNote(it, "Keep it in Riko's voice.") } }
+        val request = runBlocking { repo.writingRequest(sessionId, "Once upon a time", settings) }
+        assertTrue("## Author's note\nKeep it in Riko's voice." in request[0].content)
+    }
+
+    @Test
+    fun characterPicturesSurviveTheSweepAndAreDeletedWithTheCharacter() {
+        images.file("riko.jpg").writeBytes(byteArrayOf(1))
+        images.file("background.jpg").writeBytes(byteArrayOf(2))
+        images.file("unsaved-pick.jpg").writeBytes(byteArrayOf(3))
+        val riko = runBlocking {
+            repo.getCharacter(repo.saveCharacter(CharacterEntity(name = "Riko", avatarImage = "riko.jpg")))!!
+        }
+        assertEquals(listOf("riko.jpg"), runBlocking { db.characterDao().getAllAvatarImages() })
+
+        runBlocking { repo.sweepOrphanImages(keep = setOf("background.jpg", "")) }
+        assertTrue(images.exists("riko.jpg"))
+        assertTrue(images.exists("background.jpg"))
+        assertFalse(images.exists("unsaved-pick.jpg"))
+
+        runBlocking { repo.deleteCharacter(riko) }
+        assertFalse(images.exists("riko.jpg"))
+        assertTrue(images.exists("background.jpg"))
+    }
+
+    @Test
+    fun backupKeepsNotesAndPicturesThatAreStillOnTheDevice() {
+        images.file("riko.jpg").writeBytes(byteArrayOf(1))
+        val sessionId = runBlocking {
+            val riko = repo.getCharacter(repo.saveCharacter(CharacterEntity(name = "Riko", avatarImage = "riko.jpg")))!!
+            repo.saveCharacter(CharacterEntity(name = "Reg", avatarImage = "deleted.jpg"))
+            repo.createSession(riko).also { repo.updateNote(it, "Layer 2.") }
+        }
+        val backups = BackupManager(db, images)
+        val json = runBlocking { backups.export() }
+        runBlocking { backups.import(json, replace = true) }
+        val characters = runBlocking { db.characterDao().getAll() }
+        assertEquals("riko.jpg", characters.single { it.name == "Riko" }.avatarImage)
+        assertEquals("", characters.single { it.name == "Reg" }.avatarImage)
+        assertEquals("Layer 2.", runBlocking { db.sessionDao().getAll() }.single().note)
+        assertNotEquals(sessionId, runBlocking { db.sessionDao().getAll() }.single().id)
+    }
+
+    @Test
+    fun tokenCountsUseTheProvidersNumbersWhenGivenAndAnEstimateOtherwise() {
+        val sessionId = chatSession(mira)
+        val vm = chatViewModel(sessionId)
+        vm.sendAndAwait(sessionId, "Hi", "Hello.")
+        assertTrue("streamed requests ask for usage", sent.last().wantsUsage)
+        eventually("exact usage") { vm.tokens.value == TokenUsage(1234, 56, exact = true) }
+
+        // Non-streamed replies carry usage in the body.
+        configure { it.copy(streaming = false) }
+        vm.sendAndAwait(sessionId, "Again", "Hello again.")
+        assertFalse(sent.last().wantsUsage)
+        eventually("usage from body") { vm.tokens.value == TokenUsage(321, 9, exact = true) }
+    }
+
+    @Test
+    fun serversThatRejectStreamOptionsStillWorkAndShowAnEstimate() {
+        rejectStreamOptions = true
+        val sessionId = chatSession(mira)
+        val vm = chatViewModel(sessionId)
+        vm.sendAndAwait(sessionId, "Hi", "Hello.")
+        // First attempt with stream_options was refused, the retry without it succeeded.
+        val attempts = sent.toList()
+        assertEquals(2, attempts.size)
+        assertTrue(attempts[0].wantsUsage)
+        assertFalse(attempts[1].wantsUsage)
+        val usage = vm.tokens.value!!
+        assertFalse(usage.exact)
+        assertNull(usage.received)
+        assertEquals(TokenEstimate.request(listOf(
+            com.roleplay.ai.data.api.ChatMessage("system", attempts[1].system),
+            com.roleplay.ai.data.api.ChatMessage("assistant", "Well, hello."),
+            com.roleplay.ai.data.api.ChatMessage("user", "Hi")
+        )), usage.sent)
+
+        // The refusal is remembered: the next request goes straight through without it.
+        vm.sendAndAwait(sessionId, "Again", "Hi again.")
+        assertEquals(3, sent.size)
+        assertFalse(sent.last().wantsUsage)
+    }
+
+    @Test
+    fun tokenEstimateIsRoughlyFourCharactersPerToken() {
+        assertEquals(0, TokenEstimate.text(""))
+        assertEquals(25, TokenEstimate.text("a".repeat(100)))
+        val withImage = com.roleplay.ai.data.api.ChatMessage("user", "abcd", listOf("data:x"))
+        assertEquals(1 + 4 + TokenEstimate.PER_IMAGE + 3, TokenEstimate.request(listOf(withImage)))
     }
 
     // ---- Settings screen ----

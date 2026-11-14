@@ -24,8 +24,13 @@ data class ChatRequest(
     val messages: List<ChatMessage>,
     val temperature: Double = 0.9,
     @SerialName("max_tokens") val maxTokens: Int = 1024,
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    /** Ask a streaming endpoint to append token usage to its last chunk. */
+    val includeUsage: Boolean = false
 )
+
+/** Token counts reported by the provider. */
+data class Usage(val promptTokens: Int, val completionTokens: Int?)
 
 data class ApiConfig(
     val baseUrl: String,
@@ -66,6 +71,17 @@ internal fun ChatRequest.toJsonElement(): JsonElement = buildJsonObject {
     put("temperature", temperature)
     put("max_tokens", maxTokens)
     put("stream", stream)
+    if (stream && includeUsage) {
+        put("stream_options", buildJsonObject { put("include_usage", true) })
+    }
+}
+
+/** The `usage` object of a response or of the final streamed chunk, if there is one. */
+internal fun extractUsage(obj: JsonObject): Usage? {
+    val usage = obj["usage"] as? JsonObject ?: return null
+    val prompt = (usage["prompt_tokens"] as? JsonPrimitive)?.content?.toIntOrNull() ?: return null
+    val completion = (usage["completion_tokens"] as? JsonPrimitive)?.content?.toIntOrNull()
+    return Usage(prompt, completion)
 }
 
 internal fun extractDelta(obj: JsonObject): String? {

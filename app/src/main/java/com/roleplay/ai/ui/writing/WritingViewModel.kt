@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.roleplay.ai.RoleplayApp
+import com.roleplay.ai.data.prefs.AppSettings
 import com.roleplay.ai.data.prefs.SettingsStore
 import com.roleplay.ai.data.repo.ChatRepository
 import com.roleplay.ai.domain.TextJoin
@@ -17,7 +18,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -39,6 +42,13 @@ class WritingViewModel(
     var title by mutableStateOf("")
         private set
 
+    var note by mutableStateOf("")
+        private set
+
+    /** Saved settings, for the "what gets sent" line under the document. */
+    val settings: StateFlow<AppSettings> = store.settings
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
     var loaded by mutableStateOf(false)
         private set
 
@@ -59,6 +69,7 @@ class WritingViewModel(
             val session = repo.getSession(sessionId)
             if (session != null) {
                 title = session.title
+                note = session.note
                 lastSaved = session.document
                 document = TextFieldValue(session.document, TextRange(session.document.length))
             }
@@ -76,6 +87,11 @@ class WritingViewModel(
         if (_generating.value || !loaded) return
         if (value.text != document.text) _saved.value = false
         document = value
+    }
+
+    fun saveNote(newNote: String) {
+        note = newNote.trim()
+        viewModelScope.launch { repo.updateNote(sessionId, note) }
     }
 
     fun rename(newTitle: String) {

@@ -101,6 +101,7 @@ class AppUiTest {
         // -- Generate with AI in the character editor --
         clickText("Characters")
         clickText("New character")
+        rule.onNodeWithText("Add picture", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         clickText("Generate with AI")
         rule.onNodeWithText("Short description").performTextInput("a pirate captain")
         clickText("Generate")
@@ -164,6 +165,18 @@ class AppUiTest {
             stored.last().variantList()
         )
 
+        // -- Token line under the input --
+        waitForText("tokens sent", substring = true)
+
+        // -- Per-chat note --
+        rule.onNodeWithContentDescription("Chat note").performClick()
+        rule.onNodeWithText("Note").performTextInput("We are on the 2nd layer.")
+        clickText("Save")
+        waitForText("Note: We are on the 2nd layer.")
+        rule.waitUntil(15_000) {
+            runBlocking { app.repository.db.sessionDao().getAll() }.any { it.note == "We are on the 2nd layer." }
+        }
+
         // -- Auto-memory (on by default) shows up in Memories --
         rule.waitUntil(15_000) {
             runBlocking { app.repository.db.memoryDao().getForSession(sessionId) }.any { it.content == "The user is the new deckhand." }
@@ -188,6 +201,7 @@ class AppUiTest {
         clickText("New writing document")
         waitForText("Untitled document")
         rule.onNode(hasSetTextAction()).performTextInput("The fog rolled over the lighthouse")
+        waitForText("Continue sends the whole document", substring = true)
         clickText("Continue")
         waitForText("The fog rolled over the lighthouse and the lighthouse answered.")
         val writingSystem = systems.last { "co-writer" in it }
@@ -216,6 +230,7 @@ class AppUiTest {
 
         rule.onNodeWithText("Choose image").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Manage lorebook").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Send at most this many words (0 = whole document)").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Auto-save new facts as memories").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Export").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Import").performScrollTo().assertIsDisplayed()

@@ -12,6 +12,10 @@ object PromptBuilder {
             "summarize anything already written, do not start over, and do not add commentary. " +
             "Output only the continuation.]"
 
+    /** Wraps a per-chat note so the model treats it as standing direction, not dialogue. */
+    fun note(note: String): String =
+        "[Author's note for this scene. Keep to it, but do not mention or quote it: ${note.trim()}]"
+
     /** System prompt for a chat with one character, or a group chat with several. */
     fun chat(
         characters: List<CharacterEntity>,
@@ -54,12 +58,19 @@ object PromptBuilder {
     fun writing(
         globalInstructions: String,
         memories: List<MemoryEntity>,
-        lore: List<LorebookEntity>
+        lore: List<LorebookEntity>,
+        note: String = ""
     ): String = buildString {
         appendLine("You are a co-writer. The user's message is the complete text of a document they are writing.")
         appendLine("Continue it seamlessly from exactly where it ends, matching its voice, tense, point of view, and formatting.")
         appendLine("Do not repeat or rewrite existing text, do not summarize, and do not add titles, notes, or commentary. Output only the new text that comes next.")
+        appendLine("If the document starts with \"[Earlier text omitted]\", only its end was sent; carry on from that end.")
         appendShared(globalInstructions, memories, lore)
+        if (note.isNotBlank()) {
+            appendLine()
+            appendLine("## Author's note")
+            appendLine(note.trim())
+        }
     }.trim()
 
     private fun StringBuilder.appendCard(character: CharacterEntity, heading: Boolean) {

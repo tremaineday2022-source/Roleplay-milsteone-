@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Stop
@@ -46,6 +47,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.roleplay.ai.RoleplayApp
+import com.roleplay.ai.domain.DocumentWindow
+import com.roleplay.ai.domain.TokenEstimate
+import com.roleplay.ai.ui.common.NoteDialog
+import com.roleplay.ai.ui.common.NoteStrip
+import java.text.NumberFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +68,8 @@ fun WritingScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var renaming by remember { mutableStateOf(false) }
+    var editingNote by remember { mutableStateOf(false) }
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     LaunchedEffect(error) {
         error?.let {
@@ -72,6 +80,16 @@ fun WritingScreen(
 
     val text = viewModel.document.text
     val words = remember(text) { text.split(Regex("\\s+")).count { it.isNotEmpty() } }
+    val limit = settings.writingContextWords
+    val sentTokens = remember(text, limit) { TokenEstimate.text(DocumentWindow.tail(text, limit)) }
+    val sendLine = remember(sentTokens, words, limit) {
+        val tokens = NumberFormat.getIntegerInstance().format(sentTokens)
+        if (limit in 1 until words) {
+            "Continue sends the last ${NumberFormat.getIntegerInstance().format(limit)} words (≈$tokens tokens)."
+        } else {
+            "Continue sends the whole document (≈$tokens tokens)."
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -101,6 +119,9 @@ fun WritingScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { editingNote = true }) {
+                        Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = "Document note")
+                    }
                     IconButton(onClick = onOpenLorebook) {
                         Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Lorebook")
                     }
@@ -118,6 +139,7 @@ fun WritingScreen(
                 .padding(padding)
                 .imePadding()
         ) {
+            if (viewModel.note.isNotBlank()) NoteStrip(note = viewModel.note, onClick = { editingNote = true })
             TextField(
                 value = viewModel.document,
                 onValueChange = viewModel::onDocumentChange,
@@ -145,7 +167,7 @@ fun WritingScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "The whole document is sent as context.",
+                        sendLine,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
@@ -166,6 +188,18 @@ fun WritingScreen(
                 }
             }
         }
+    }
+
+    if (editingNote) {
+        NoteDialog(
+            initial = viewModel.note,
+            forDocument = true,
+            onDismiss = { editingNote = false },
+            onSave = {
+                viewModel.saveNote(it)
+                editingNote = false
+            }
+        )
     }
 
     if (renaming) {

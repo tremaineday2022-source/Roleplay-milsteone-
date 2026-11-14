@@ -5,6 +5,7 @@ import com.roleplay.ai.data.api.ApiConfig
 import com.roleplay.ai.data.api.ChatMessage
 import com.roleplay.ai.data.api.OpenAiClient
 import com.roleplay.ai.data.api.OpenAiException
+import com.roleplay.ai.data.api.Usage
 import com.roleplay.ai.data.db.AppDatabase
 import com.roleplay.ai.data.db.CharacterEntity
 import com.roleplay.ai.data.db.JsonList
@@ -20,6 +21,7 @@ import com.roleplay.ai.data.db.withNewVariant
 import com.roleplay.ai.data.db.withVariantOffset
 import com.roleplay.ai.data.files.ImageStore
 import com.roleplay.ai.data.prefs.AppSettings
+import com.roleplay.ai.domain.DocumentWindow
 import com.roleplay.ai.domain.JsonExtract
 import com.roleplay.ai.domain.LoreMatcher
 import com.roleplay.ai.domain.PromptBuilder
@@ -72,7 +74,11 @@ class ChatRepository(
         session.memberIds().mapNotNull { characterDao.getById(it) }
 
     suspend fun saveCharacter(character: CharacterEntity): Long = characterDao.upsert(character)
-    suspend fun deleteCharacter(character: CharacterEntity) = characterDao.delete(character)
+
+    suspend fun deleteCharacter(character: CharacterEntity) {
+        characterDao.delete(character)
+        if (character.avatarImage.isNotBlank()) withContext(Dispatchers.IO) { images.delete(listOf(character.avatarImage)) }
+    }
 
     // ---- Sessions ----
 
@@ -118,6 +124,8 @@ class ChatRepository(
     suspend fun updateSessionTitle(sessionId: Long, title: String) =
         sessionDao.updateTitle(sessionId, title)
 
+    suspend fun updateNote(sessionId: Long, note: String) = sessionDao.updateNote(sessionId, note.trim())
+
     suspend fun saveDocument(sessionId: Long, document: String) =
         sessionDao.updateDocument(sessionId, document)
 
@@ -147,10 +155,11 @@ class ChatRepository(
 
     suspend fun importImages(uris: List<Uri>): List<String> = uris.mapNotNull { images.importImage(it) }
 
-    /** Removes stored images that no message and no setting refers to. */
+    /** Removes stored images that no message, character or setting refers to. */
     suspend fun sweepOrphanImages(keep: Set<String>) = withContext(Dispatchers.IO) {
-        val referenced = messageDao.getAllImageLists().flatMap { JsonList.decode(it) }.toSet()
-        images.sweep(referenced + keep)
+        val referenced = messageDao.getAllImageLists().flatMap { JsonList.decode(it) }.toSet() +
+            characterDao.getAllAvatarImages()
+        images.sweep(referenced + keep.filter { it.isNotBlank() })
     }
 
     // ---- Memories & lorebook ----
@@ -202,24 +211,35 @@ class ChatRepository(
                 ChatMessage(message.role, message.content, message.imageList().mapNotNull { images.dataUrl(it) })
             }
         }
-        return buildList {
-            add(ChatMessage("system", system))
-            addAll(turns)
-            if (continueLast) add(ChatMessage("user", PromptBuilder.CONTINUE_INSTRUCTION))
+        val conversation = turns.toMutableList()
+        if (continueLast) conversation += ChatMessage("user", PromptBuilder.CONTINUE_INSTRUCTION)
+        if (session.note.isNotBlank()) {
+            // Just before the latest user turn, where models pay most attention.
+            val at = conversation.indexOfLast { it.role == "user" }.takeIf { it >= 0 } ?: conversation.size
+            conversation.add(at, ChatMessage("system", PromptBuilder.note(session.note)))
         }
+        return listOf(ChatMessage("system", system)) + conversation
     }
 
-    /** Writing mode: the entire document is sent, untruncated, as the user turn. */
+    /**
+     * Writing mode: the document is sent as the user turn — whole, or only its latest words when
+     * a limit is set. Lorebook entries are matched against the whole document either way.
+     */
     suspend fun writingRequest(sessionId: Long, document: String, settings: AppSettings): List<ChatMessage> {
         val system = PromptBuilder.writing(
             globalInstructions = settings.globalInstructions,
             memories = memoryDao.getForSession(sessionId),
-            lore = LoreMatcher.match(lorebookDao.getEnabled(), document)
+            lore = LoreMatcher.match(lorebookDao.getEnabled(), document),
+            note = sessionDao.getById(sessionId)?.note.orEmpty()
         )
-        return listOf(ChatMessage("system", system), ChatMessage("user", document))
+        return listOf(
+            ChatMessage("system", system),
+            ChatMessage("user", DocumentWindow.tail(document, settings.writingContextWords))
+        )
     }
 
-    fun stream(config: ApiConfig, messages: List<ChatMessage>) = api.streamChat(config, messages)
+    fun stream(config: ApiConfig, messages: List<ChatMessage>, onUsage: ((Usage) -> Unit)? = null) =
+        api.streamChat(config, messages, onUsage)
 
     /** Stores generated text: a new message, a new variant of [targetId], or appended to it. */
     suspend fun commitReply(sessionId: Long, kind: ReplyKind, targetId: Long?, text: String) {

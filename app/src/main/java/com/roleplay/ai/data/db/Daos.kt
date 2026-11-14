@@ -19,6 +19,9 @@ interface CharacterDao {
     @Query("SELECT * FROM characters WHERE id = :id")
     suspend fun getById(id: Long): CharacterEntity?
 
+    @Query("SELECT avatarImage FROM characters WHERE avatarImage != ''")
+    suspend fun getAllAvatarImages(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(character: CharacterEntity): Long
 
@@ -57,6 +60,9 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET document = :document, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateDocument(id: Long, document: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE sessions SET note = :note WHERE id = :id")
+    suspend fun updateNote(id: Long, note: String)
 
     @Query("UPDATE sessions SET title = :title WHERE id = :id")
     suspend fun updateTitle(id: Long, title: String)

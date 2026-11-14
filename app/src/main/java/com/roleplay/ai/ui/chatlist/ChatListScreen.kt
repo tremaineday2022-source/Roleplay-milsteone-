@@ -49,6 +49,7 @@ import com.roleplay.ai.data.db.CharacterEntity
 import com.roleplay.ai.data.db.isGroup
 import com.roleplay.ai.data.db.isWriting
 import com.roleplay.ai.ui.characters.CharacterAvatar
+import com.roleplay.ai.ui.characters.avatarFile
 import java.text.DateFormat
 import java.util.Date
 
@@ -103,6 +104,7 @@ fun ChatListScreen(
                 items(items, key = { it.session.id }) { item ->
                     ChatListRow(
                         item = item,
+                        imageStore = app.repository.images,
                         onClick = {
                             if (item.session.isWriting) onOpenWriting(item.session.id) else onOpenChat(item.session.id)
                         },
@@ -134,7 +136,12 @@ fun ChatListScreen(
 }
 
 @Composable
-private fun ChatListRow(item: ChatListItem, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun ChatListRow(
+    item: ChatListItem,
+    imageStore: com.roleplay.ai.data.files.ImageStore,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
     Card(modifier = Modifier
         .fillMaxWidth()
         .clickable(onClick = onClick)) {
@@ -147,7 +154,11 @@ private fun ChatListRow(item: ChatListItem, onClick: () -> Unit, onDelete: () ->
             when {
                 item.session.isWriting -> SessionBadge(Icons.Filled.EditNote)
                 item.session.isGroup -> SessionBadge(Icons.Filled.Groups)
-                else -> CharacterAvatar(name = item.character?.name ?: "?", color = item.character?.avatarColor)
+                else -> CharacterAvatar(
+                    name = item.character?.name ?: "?",
+                    color = item.character?.avatarColor,
+                    image = imageStore.avatarFile(item.character)
+                )
             }
             Column(
                 modifier = Modifier
@@ -238,7 +249,12 @@ fun CharacterPickerDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Checkbox(checked = checked, onCheckedChange = { toggle() })
-                                CharacterAvatar(name = character.name, color = character.avatarColor, size = 32.dp)
+                                CharacterAvatar(
+                                    name = character.name,
+                                    color = character.avatarColor,
+                                    size = 32.dp,
+                                    image = app.repository.images.avatarFile(character)
+                                )
                                 Column(modifier = Modifier.padding(start = 12.dp)) {
                                     Text(character.name, style = MaterialTheme.typography.bodyLarge)
                                     if (character.tagline.isNotBlank()) {

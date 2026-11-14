@@ -87,7 +87,9 @@ class BackupManager(private val db: AppDatabase, private val images: ImageStore)
 
             val characterIds = HashMap<Long, Long>()
             backup.characters.sortedBy { it.id }.forEach { character ->
-                characterIds[character.id] = db.characterDao().upsert(character.copy(id = 0))
+                // Pictures are not part of the backup; keep one only if the file is still here.
+                val picture = character.avatarImage.takeIf { images.exists(it) }.orEmpty()
+                characterIds[character.id] = db.characterDao().upsert(character.copy(id = 0, avatarImage = picture))
             }
 
             val sessionIds = HashMap<Long, Long>()

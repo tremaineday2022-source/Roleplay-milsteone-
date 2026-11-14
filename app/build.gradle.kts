@@ -14,15 +14,18 @@ android {
         applicationId = "com.roleplay.ai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.2.0"
     }
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
         // Each test class gets its own JVM: the app keeps process-wide singletons (database,
         // settings store), and view models left over from one class disturb the next.
-        unitTests.all { it.forkEvery = 1 }
+        unitTests.all {
+            it.forkEvery = 1
+            it.systemProperty("screenshot.dir", layout.buildDirectory.dir("screenshots").get().asFile.path)
+        }
     }
 
     buildTypes {
