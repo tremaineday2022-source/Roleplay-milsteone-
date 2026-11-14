@@ -15,6 +15,7 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import com.roleplay.ai.data.db.CharacterEntity
 import com.roleplay.ai.data.db.variantList
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -201,6 +202,18 @@ class AppUiTest {
 
         // -- Settings shows the new controls --
         clickText("Settings")
+
+        // -- Typing in Settings keeps every letter, in order --
+        val instructions = rule.onNodeWithText("Global instructions (applied to every chat)")
+        instructions.performScrollTo()
+        "write a roleplay".forEach { letter -> instructions.performTextInput(letter.toString()) }
+        rule.onNodeWithText("write a roleplay").assertIsDisplayed()
+        rule.waitUntil(15_000) { runBlocking { app.settingsStore.settings.first() }.globalInstructions == "write a roleplay" }
+
+        // -- There is a way to check the connection --
+        rule.onNodeWithText("Test connection", useUnmergedTree = true).performScrollTo().performClick()
+        waitForText("Connected. m answered, so chats will work.")
+
         rule.onNodeWithText("Choose image").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Manage lorebook").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Auto-save new facts as memories").performScrollTo().assertIsDisplayed()

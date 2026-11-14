@@ -241,6 +241,15 @@ class ChatRepository(
         runCatching { sessionDao.getById(sessionId)?.let { maybeSummarize(it, settings) } }
     }
 
+    /** Sends one tiny request. Returns normally if the endpoint, key and model all work. */
+    suspend fun testConnection(settings: AppSettings) {
+        keyError(settings)?.let { throw OpenAiException(it) }
+        api.complete(
+            toApiConfig(settings, streaming = false).copy(temperature = 0.0, maxTokens = 16),
+            listOf(ChatMessage("user", "Reply with the single word OK."))
+        )
+    }
+
     // ---- Auto-memory ----
 
     /**
