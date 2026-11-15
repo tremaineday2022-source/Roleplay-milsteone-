@@ -38,6 +38,14 @@ class ImageStore(private val context: Context) {
         }.getOrNull()
     }
 
+    /** Duplicates a stored image under a new name, so two messages never share one file. */
+    fun copy(name: String): String? = runCatching {
+        val source = file(name).takeIf { it.isFile } ?: return null
+        val copyName = "${UUID.randomUUID()}.${source.extension.ifBlank { "jpg" }}"
+        source.copyTo(file(copyName))
+        copyName
+    }.getOrNull()
+
     fun delete(names: Collection<String>) {
         names.forEach { runCatching { file(it).delete() } }
     }

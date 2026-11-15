@@ -15,6 +15,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -113,8 +115,11 @@ class MigrationTest {
         createVersion1Database()
         val current = openCurrent()
 
-        // Opening runs both migrations (1 -> 2 -> 3) and Room's schema validation.
-        assertEquals(3, current.openHelper.writableDatabase.version)
+        // Opening runs every migration (1 -> 2 -> 3 -> 4) and Room's schema validation.
+        assertEquals(4, current.openHelper.writableDatabase.version)
+        assertEquals("", current.characterDao().getById(1)!!.model)
+        assertNull(current.characterDao().getById(1)!!.temperature)
+        assertFalse(current.sessionDao().getById(7)!!.pinned)
         assertEquals("", current.characterDao().getById(1)!!.avatarImage)
         assertEquals("", current.sessionDao().getById(7)!!.note)
 
@@ -147,14 +152,14 @@ class MigrationTest {
         // The new table exists and works.
         assertTrue(current.lorebookDao().getAll().isEmpty())
         current.lorebookDao().upsert(LorebookEntity(name = "City", keywords = "silverhold", content = "A city."))
-        assertEquals("City", current.lorebookDao().observeAll().first().single().name)
+        assertEquals("City", current.lorebookDao().observeFor(0).first().single().name)
     }
 
     @Test
-    fun version2DataSurvivesTheUpgradeTo3() = runBlocking {
+    fun version2DataSurvivesTheUpgrade() = runBlocking {
         createVersion2Database()
         val current = openCurrent()
-        assertEquals(3, current.openHelper.writableDatabase.version)
+        assertEquals(4, current.openHelper.writableDatabase.version)
 
         assertEquals(listOf("Riko", "Reg"), current.characterDao().getAll().map { it.name })
         current.characterDao().getAll().forEach { assertEquals("", it.avatarImage) }
@@ -183,13 +188,73 @@ class MigrationTest {
     }
 
     @Test
-    fun version2SchemaMigratesToTheSameTablesAsAFreshInstall() {
-        createSchema(2).close()
-        val migrated = tableDefinitions(openCurrent())
-        db?.close()
-        context.deleteDatabase(AppDatabase.NAME)
+    fun everyOlderSchemaMigratesToTheSameTablesAsAFreshInstall() {
         val fresh = tableDefinitions(openCurrent())
-        assertEquals(fresh, migrated)
+        for (version in 1..3) {
+            db?.close()
+            context.deleteDatabase(AppDatabase.NAME)
+            createSchema(version).close()
+            assertEquals("schema migrated from version $version", fresh, tableDefinitions(openCurrent()))
+        }
+    }
+
+    /** A version-3 database (app 1.2.0): a pictured character, a noted chat, lore and a memory. */
+    private fun createVersion3Database() {
+        createSchema(3).use { v3 ->
+            v3.execSQL(
+                "INSERT INTO characters (id, name, tagline, avatarColor, persona, description, exampleDialogue, greeting, isFavorite, createdAt, avatarImage) " +
+                    "VALUES (1, 'Nanachi', 'Hollow', 4284960932, 'Gentle.', '4th layer.', '', 'Naa.', 1, 1000, 'nanachi.jpg')"
+            )
+            v3.execSQL(
+                "INSERT INTO sessions (id, characterId, title, summary, summarizedUpTo, createdAt, updatedAt, mode, document, characterIds, note) " +
+                    "VALUES (5, 1, 'Nanachi', 'Met in the 4th layer.', 2, 1000, 3000, 'chat', '', '', 'Mitty is asleep.')"
+            )
+            v3.execSQL(
+                "INSERT INTO messages (id, sessionId, role, content, createdAt, variants, variantIndex, images) " +
+                    "VALUES (1, 5, 'assistant', 'Naa.', 1000, '[]', 0, '[]')"
+            )
+            v3.execSQL("INSERT INTO memories (id, sessionId, content, enabled, createdAt) VALUES (1, 5, 'Nanachi is a Narehate.', 1, 1002)")
+            v3.execSQL("INSERT INTO lorebook (id, name, keywords, content, enabled, createdAt) VALUES (1, 'Curse', 'curse', 'Ascending hurts.', 1, 1003)")
+        }
+    }
+
+    @Test
+    fun version3DataSurvivesTheUpgradeTo4() = runBlocking {
+        createVersion3Database()
+        val current = openCurrent()
+        assertEquals(4, current.openHelper.writableDatabase.version)
+
+        val character = current.characterDao().getById(1)!!
+        assertEquals("Nanachi", character.name)
+        assertEquals("nanachi.jpg", character.avatarImage)
+        assertTrue(character.isFavorite)
+        assertEquals("", character.model)
+        assertNull(character.temperature)
+
+        val session = current.sessionDao().getById(5)!!
+        assertEquals("Mitty is asleep.", session.note)
+        assertEquals("Met in the 4th layer.", session.summary)
+        assertFalse(session.pinned)
+
+        assertEquals("Naa.", current.messageDao().getForSession(5).single().content)
+        assertEquals("Nanachi is a Narehate.", current.memoryDao().getForSession(5).single().content)
+
+        // Lore that existed before the update stays shared by every chat.
+        val lore = current.lorebookDao().getAll().single()
+        assertEquals("Ascending hurts.", lore.content)
+        assertEquals(0L, lore.sessionId)
+        assertEquals(listOf(lore), current.lorebookDao().getEnabledFor(5))
+        assertEquals(listOf(lore), current.lorebookDao().getEnabledFor(999))
+
+        // The new columns work.
+        current.characterDao().upsert(character.copy(model = "some/model", temperature = 1.3f))
+        assertEquals("some/model", current.characterDao().getById(1)!!.model)
+        assertEquals(1.3f, current.characterDao().getById(1)!!.temperature)
+        current.sessionDao().updatePinned(5, true)
+        assertTrue(current.sessionDao().getById(5)!!.pinned)
+        current.lorebookDao().upsert(LorebookEntity(name = "Own", keywords = "x", content = "Only here.", sessionId = 5))
+        assertEquals(2, current.lorebookDao().getEnabledFor(5).size)
+        assertEquals(1, current.lorebookDao().getEnabledFor(6).size)
     }
 
     @Test

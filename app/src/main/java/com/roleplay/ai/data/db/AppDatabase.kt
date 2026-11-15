@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemoryEntity::class,
         LorebookEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -61,7 +61,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        /**
+         * v3 -> v4: per-chat lorebook entries, a model and temperature per character, and
+         * pinned chats. Existing rows are kept.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `lorebook` ADD COLUMN `sessionId` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `characters` ADD COLUMN `model` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `characters` ADD COLUMN `temperature` REAL")
+                db.execSQL("ALTER TABLE `sessions` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
         @Volatile private var instance: AppDatabase? = null
 

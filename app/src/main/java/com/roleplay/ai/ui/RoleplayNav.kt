@@ -40,12 +40,14 @@ object Routes {
     const val CHARACTER_EDIT = "character/edit?characterId={characterId}"
     const val MEMORY = "memory/{sessionId}"
     const val WRITING = "writing/{sessionId}"
-    const val LOREBOOK = "lorebook"
+    const val LOREBOOK = "lorebook?sessionId={sessionId}"
 
     fun chat(sessionId: Long) = "chat/$sessionId"
     fun characterEdit(characterId: Long = 0L) = "character/edit?characterId=$characterId"
     fun memory(sessionId: Long) = "memory/$sessionId"
     fun writing(sessionId: Long) = "writing/$sessionId"
+    /** The lorebook as seen from a chat or document, or the shared one when [sessionId] is 0. */
+    fun lorebook(sessionId: Long = 0L) = "lorebook?sessionId=$sessionId"
 }
 
 @Composable
@@ -91,6 +93,7 @@ fun RoleplayNav(app: RoleplayApp) {
                     app = app,
                     onOpenChat = { navController.navigate(Routes.chat(it)) },
                     onOpenWriting = { navController.navigate(Routes.writing(it)) },
+                    onGoToSettings = { navController.navigateTab(Routes.SETTINGS) },
                     onGoToCharacters = { navController.navigateTab(Routes.CHARACTERS) }
                 )
             }
@@ -104,7 +107,7 @@ fun RoleplayNav(app: RoleplayApp) {
                 )
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(app = app, onOpenLorebook = { navController.navigate(Routes.LOREBOOK) })
+                SettingsScreen(app = app, onOpenLorebook = { navController.navigate(Routes.lorebook()) })
             }
             composable(
                 Routes.CHAT,
@@ -116,7 +119,13 @@ fun RoleplayNav(app: RoleplayApp) {
                     sessionId = sessionId,
                     onBack = { navController.popBackStack() },
                     onOpenMemories = { navController.navigate(Routes.memory(sessionId)) },
-                    onOpenLorebook = { navController.navigate(Routes.LOREBOOK) }
+                    onOpenLorebook = { navController.navigate(Routes.lorebook(sessionId)) },
+                    // A branch replaces the chat it came from on the back stack: Back returns to the list.
+                    onOpenChat = { branchId ->
+                        navController.navigate(Routes.chat(branchId)) {
+                            popUpTo(Routes.CHAT) { inclusive = true }
+                        }
+                    }
                 )
             }
             composable(
@@ -129,11 +138,21 @@ fun RoleplayNav(app: RoleplayApp) {
                     sessionId = sessionId,
                     onBack = { navController.popBackStack() },
                     onOpenMemories = { navController.navigate(Routes.memory(sessionId)) },
-                    onOpenLorebook = { navController.navigate(Routes.LOREBOOK) }
+                    onOpenLorebook = { navController.navigate(Routes.lorebook(sessionId)) }
                 )
             }
-            composable(Routes.LOREBOOK) {
-                LorebookScreen(app = app, onBack = { navController.popBackStack() })
+            composable(
+                Routes.LOREBOOK,
+                arguments = listOf(navArgument("sessionId") {
+                    type = NavType.LongType
+                    defaultValue = 0L
+                })
+            ) { entry ->
+                LorebookScreen(
+                    app = app,
+                    sessionId = entry.arguments?.getLong("sessionId") ?: 0L,
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(
                 Routes.CHARACTER_EDIT,

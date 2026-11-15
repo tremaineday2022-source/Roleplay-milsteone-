@@ -56,14 +56,18 @@ class BackgroundScreenshotTest {
         rule.waitUntil(10_000) { rule.onAllNodes(hasText("Riko")).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("Riko").performClick()
         rule.waitUntil(10_000) { rule.onAllNodes(hasText("Hello!")).fetchSemanticsNodes().isNotEmpty() }
-        rule.waitForIdle()
-        Thread.sleep(500)
-        rule.waitForIdle()
-
-        // Draw the whole window into a bitmap (captureToImage needs a real GPU surface).
+        // Draw the whole window into a bitmap (captureToImage needs a real GPU surface). The
+        // picture is decoded in the background, so keep drawing until it shows or time runs out.
         val view = rule.activity.window.decorView
         val shot = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        rule.runOnUiThread { view.draw(Canvas(shot)) }
+        val deadline = System.currentTimeMillis() + 15_000
+        do {
+            rule.waitForIdle()
+            rule.runOnUiThread { view.draw(Canvas(shot)) }
+            val probe = shot.getPixel(shot.width / 2, (shot.height * 0.4).toInt())
+            val loaded = (Color.red(probe) + Color.green(probe) + Color.blue(probe)) / 3 >= 80
+            if (!loaded) Thread.sleep(100)
+        } while (!loaded && System.currentTimeMillis() < deadline)
         System.getProperty("screenshot.dir")?.let { dir ->
             File(dir).mkdirs()
             File(dir, "chat-background-night.png").outputStream().use { shot.compress(Bitmap.CompressFormat.PNG, 100, it) }

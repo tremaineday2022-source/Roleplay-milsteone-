@@ -30,6 +30,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.roleplay.ai.RoleplayApp
 import com.roleplay.ai.data.db.CharacterEntity
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 private val Palette = listOf(
     0xFF6750A4, 0xFF7D5260, 0xFF00639B, 0xFF00696E, 0xFF4C662B,
@@ -76,6 +79,10 @@ fun CharacterEditScreen(
     // Kept from the stored card so editing does not reset them.
     var isFavorite by remember { mutableStateOf(false) }
     var createdAt by remember { mutableStateOf<Long?>(null) }
+    // Optional per-character model settings; blank / off means "use the app's Settings".
+    var model by remember { mutableStateOf("") }
+    var customTemperature by remember { mutableStateOf(false) }
+    var temperature by remember { mutableStateOf(0.9f) }
     // The picture saved on the character, and the one shown in the editor (may be unsaved).
     var savedPicture by remember { mutableStateOf("") }
     var picture by rememberSaveable { mutableStateOf("") }
@@ -106,6 +113,9 @@ fun CharacterEditScreen(
                     greeting = c.greeting
                     avatarColor = c.avatarColor
                     isFavorite = c.isFavorite
+                    model = c.model
+                    customTemperature = c.temperature != null
+                    temperature = c.temperature ?: 0.9f
                     savedPicture = c.avatarImage
                     picture = c.avatarImage
                     createdAt = c.createdAt
@@ -142,7 +152,9 @@ fun CharacterEditScreen(
                                         greeting = greeting,
                                         isFavorite = isFavorite,
                                         createdAt = createdAt ?: System.currentTimeMillis(),
-                                        avatarImage = picture
+                                        avatarImage = picture,
+                                        model = model.trim(),
+                                        temperature = if (customTemperature) temperature else null
                                     )
                                 )
                                 if (savedPicture.isNotBlank() && savedPicture != picture) {
@@ -278,6 +290,38 @@ fun CharacterEditScreen(
                 minLines = 2,
                 maxLines = 6
             )
+
+            Text("AI model for this character (optional)", style = MaterialTheme.typography.labelLarge)
+            OutlinedTextField(
+                value = model,
+                onValueChange = { model = it },
+                label = { Text("Model name") },
+                placeholder = { Text("Empty = the model from Settings") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Text(
+                "Used in one-on-one chats with this character. Group chats always use the model " +
+                    "from Settings. Type the name exactly as your provider lists it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Custom creativity (temperature)", modifier = Modifier.weight(1f))
+                Switch(checked = customTemperature, onCheckedChange = { customTemperature = it })
+            }
+            if (customTemperature) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Temperature", modifier = Modifier.weight(1f))
+                    Text(String.format(Locale.US, "%.1f", temperature))
+                }
+                Slider(
+                    value = temperature,
+                    onValueChange = { temperature = it },
+                    valueRange = 0f..2f,
+                    steps = 19
+                )
+            }
         }
     }
 

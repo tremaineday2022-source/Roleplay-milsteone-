@@ -18,6 +18,7 @@ import com.roleplay.ai.domain.JsonExtract
 import com.roleplay.ai.domain.LoreMatcher
 import com.roleplay.ai.domain.PromptBuilder
 import com.roleplay.ai.domain.TextJoin
+import com.roleplay.ai.ui.settings.isUnencryptedRemote
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -159,6 +160,23 @@ class TextToolsTest {
         assertTrue(TextJoin.isDuplicate("Kira is allergic to cats, badly", known))
         assertFalse(TextJoin.isDuplicate("Kira owns a bakery in Silverhold.", known))
         assertTrue(TextJoin.isDuplicate("  ", known))
+    }
+
+    // ---- Settings helpers ----
+
+    @Test
+    fun unencryptedWarningIsOnlyForRemoteHttpAddresses() {
+        assertTrue(isUnencryptedRemote("http://api.example.com/v1"))
+        assertTrue(isUnencryptedRemote("  HTTP://203.0.113.5:8080/v1"))
+        assertTrue(isUnencryptedRemote("http://172.32.0.1/v1"))
+        assertFalse(isUnencryptedRemote("https://api.example.com/v1"))
+        assertFalse(isUnencryptedRemote("http://localhost:11434/v1"))
+        assertFalse(isUnencryptedRemote("http://127.0.0.1:1234/v1"))
+        assertFalse(isUnencryptedRemote("http://192.168.1.20:1234/v1"))
+        assertFalse(isUnencryptedRemote("http://10.0.0.5/v1"))
+        assertFalse(isUnencryptedRemote("http://172.16.4.4:8000/v1"))
+        assertFalse(isUnencryptedRemote("http://my-pc.local:1234/v1"))
+        assertFalse(isUnencryptedRemote(""))
     }
 
     // ---- Prompts ----

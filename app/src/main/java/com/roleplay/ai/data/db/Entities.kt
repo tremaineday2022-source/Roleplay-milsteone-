@@ -21,7 +21,11 @@ data class CharacterEntity(
     val isFavorite: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     /** File name of the profile picture in the app image folder; blank for the letter avatar. */
-    val avatarImage: String = ""
+    val avatarImage: String = "",
+    /** Model used for one-on-one chats with this character; blank for the app default. */
+    val model: String = "",
+    /** Temperature for one-on-one chats with this character; null for the app default. */
+    val temperature: Float? = null
 )
 
 @Serializable
@@ -42,7 +46,9 @@ data class SessionEntity(
     /** Comma-separated character ids of a group chat; empty for one-on-one chats. */
     val characterIds: String = "",
     /** Author's note for this chat or document, kept close to the latest messages. */
-    val note: String = ""
+    val note: String = "",
+    /** Pinned chats are listed first. */
+    val pinned: Boolean = false
 ) {
     companion object {
         const val MODE_CHAT = "chat"
@@ -85,8 +91,13 @@ data class LorebookEntity(
     val keywords: String,
     val content: String,
     val enabled: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /** The one chat or document this entry belongs to; 0 for entries shared by all of them. */
+    val sessionId: Long = 0
 )
+
+/** The newest message of a session, for the chat list preview. */
+data class LastMessage(val sessionId: Long, val content: String)
 
 object JsonList {
     private val serializer = ListSerializer(String.serializer())

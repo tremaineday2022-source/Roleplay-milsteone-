@@ -1,6 +1,7 @@
 package com.roleplay.ai.ui.writing
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,10 +14,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +59,10 @@ import com.roleplay.ai.domain.DocumentWindow
 import com.roleplay.ai.domain.TokenEstimate
 import com.roleplay.ai.ui.common.NoteDialog
 import com.roleplay.ai.ui.common.NoteStrip
+import com.roleplay.ai.ui.common.LocalReadingScale
+import com.roleplay.ai.ui.common.rememberExportActions
+import com.roleplay.ai.ui.common.scaledBy
+import kotlinx.coroutines.launch
 import java.text.NumberFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,6 +81,9 @@ fun WritingScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var renaming by remember { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val export = rememberExportActions(app) { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     LaunchedEffect(error) {
@@ -125,8 +140,32 @@ fun WritingScreen(
                     IconButton(onClick = onOpenLorebook) {
                         Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Lorebook")
                     }
-                    IconButton(onClick = onOpenMemories) {
-                        Icon(Icons.Filled.Save, contentDescription = "Memories")
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Memories") },
+                                leadingIcon = { Icon(Icons.Filled.Psychology, contentDescription = null) },
+                                onClick = { menuOpen = false; onOpenMemories() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Rename document") },
+                                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                onClick = { menuOpen = false; renaming = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save as text file") },
+                                leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                                onClick = { menuOpen = false; viewModel.saveNow { export.saveAsFile(sessionId) } }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share as text") },
+                                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                                onClick = { menuOpen = false; viewModel.saveNow { export.share(sessionId) } }
+                            )
+                        }
                     }
                 }
             )
@@ -148,7 +187,7 @@ fun WritingScreen(
                     .fillMaxWidth(),
                 readOnly = generating || !viewModel.loaded,
                 placeholder = { Text("Start writing. Continue sends the whole document and adds what comes next.") },
-                textStyle = MaterialTheme.typography.bodyLarge,
+                textStyle = MaterialTheme.typography.bodyLarge.scaledBy(LocalReadingScale.current),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent,

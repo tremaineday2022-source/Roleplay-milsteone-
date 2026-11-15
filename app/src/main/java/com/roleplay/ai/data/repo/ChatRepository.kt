@@ -1,6 +1,7 @@
 package com.roleplay.ai.data.repo
 
 import android.net.Uri
+import androidx.room.withTransaction
 import com.roleplay.ai.data.api.ApiConfig
 import com.roleplay.ai.data.api.ChatMessage
 import com.roleplay.ai.data.api.OpenAiClient
@@ -9,6 +10,7 @@ import com.roleplay.ai.data.api.Usage
 import com.roleplay.ai.data.db.AppDatabase
 import com.roleplay.ai.data.db.CharacterEntity
 import com.roleplay.ai.data.db.JsonList
+import com.roleplay.ai.data.db.LastMessage
 import com.roleplay.ai.data.db.LorebookEntity
 import com.roleplay.ai.data.db.MemoryEntity
 import com.roleplay.ai.data.db.MessageEntity
@@ -21,7 +23,9 @@ import com.roleplay.ai.data.db.withNewVariant
 import com.roleplay.ai.data.db.withVariantOffset
 import com.roleplay.ai.data.files.ImageStore
 import com.roleplay.ai.data.prefs.AppSettings
+import com.roleplay.ai.domain.ChatExport
 import com.roleplay.ai.domain.DocumentWindow
+import com.roleplay.ai.domain.ExportedText
 import com.roleplay.ai.domain.JsonExtract
 import com.roleplay.ai.domain.LoreMatcher
 import com.roleplay.ai.domain.PromptBuilder
@@ -64,7 +68,9 @@ class ChatRepository(
     fun observeSession(sessionId: Long): Flow<SessionEntity?> = sessionDao.observeById(sessionId)
     fun observeMessages(sessionId: Long): Flow<List<MessageEntity>> = messageDao.observeForSession(sessionId)
     fun observeMemories(sessionId: Long): Flow<List<MemoryEntity>> = memoryDao.observeForSession(sessionId)
-    fun observeLorebook(): Flow<List<LorebookEntity>> = lorebookDao.observeAll()
+    /** Shared lorebook entries plus those of [sessionId] (0 = shared entries only). */
+    fun observeLorebook(sessionId: Long = 0): Flow<List<LorebookEntity>> = lorebookDao.observeFor(sessionId)
+    fun observeLastMessages(): Flow<List<LastMessage>> = messageDao.observeLastMessages()
 
     suspend fun getCharacter(id: Long): CharacterEntity? = characterDao.getById(id)
     suspend fun getSession(id: Long): SessionEntity? = sessionDao.getById(id)
@@ -115,8 +121,56 @@ class ChatRepository(
         val names = messageDao.getForSession(sessionId).flatMap { it.imageList() }
         messageDao.deleteForSession(sessionId)
         memoryDao.deleteForSession(sessionId)
+        lorebookDao.deleteForSession(sessionId)
         sessionDao.deleteById(sessionId)
         withContext(Dispatchers.IO) { images.delete(names) }
+    }
+
+    suspend fun setPinned(sessionId: Long, pinned: Boolean) = sessionDao.updatePinned(sessionId, pinned)
+
+    /**
+     * Starts a new chat that is a copy of [sessionId] up to and including [messageId], so the
+     * story can take a different path from there. Reply variants, the chat's own memories and
+     * lore, and its note come along; attached photos are duplicated so the two chats never
+     * share a file. Returns the new session id, or null if the message is not in that chat.
+     */
+    suspend fun branchSession(sessionId: Long, messageId: Long): Long? {
+        val source = sessionDao.getById(sessionId) ?: return null
+        val all = messageDao.getForSession(sessionId)
+        val index = all.indexOfFirst { it.id == messageId }
+        if (index < 0) return null
+        val kept = all.take(index + 1)
+        val copiedImages = withContext(Dispatchers.IO) {
+            kept.map { message -> message.imageList().mapNotNull { images.copy(it) } }
+        }
+        val now = System.currentTimeMillis()
+        // A summary that already covers later messages would leak the other path's events.
+        val keepSummary = source.summarizedUpTo <= kept.size
+        return db.withTransaction {
+            val newId = sessionDao.upsert(
+                source.copy(
+                    id = 0,
+                    title = source.title.removeSuffix(BRANCH_SUFFIX) + BRANCH_SUFFIX,
+                    pinned = false,
+                    summary = if (keepSummary) source.summary else "",
+                    summarizedUpTo = if (keepSummary) source.summarizedUpTo else 0,
+                    createdAt = now,
+                    updatedAt = now
+                )
+            )
+            kept.forEachIndexed { i, message ->
+                messageDao.insert(message.copy(id = 0, sessionId = newId, images = JsonList.encode(copiedImages[i])))
+            }
+            memoryDao.getOwnedBy(sessionId).forEach { memoryDao.upsert(it.copy(id = 0, sessionId = newId)) }
+            lorebookDao.getOwnedBy(sessionId).forEach { lorebookDao.upsert(it.copy(id = 0, sessionId = newId)) }
+            newId
+        }
+    }
+
+    /** The chat or document as plain text, ready to save or share. */
+    suspend fun exportText(sessionId: Long): ExportedText? {
+        val session = sessionDao.getById(sessionId) ?: return null
+        return ChatExport.export(session, charactersFor(session), messageDao.getForSession(sessionId))
     }
 
     suspend fun touchSession(sessionId: Long) = sessionDao.touch(sessionId)
@@ -181,6 +235,19 @@ class ChatRepository(
         stream = streaming
     )
 
+    /**
+     * The settings for a chat reply. A one-on-one chat uses its character's own model and
+     * temperature where they are set; group chats always use the app defaults.
+     */
+    fun apiConfigFor(settings: AppSettings, characters: List<CharacterEntity>): ApiConfig {
+        val base = toApiConfig(settings)
+        val character = characters.singleOrNull() ?: return base
+        return base.copy(
+            model = character.model.trim().ifEmpty { base.model },
+            temperature = character.temperature?.toDouble() ?: base.temperature
+        )
+    }
+
     /** The API-key requirement: a key is needed unless the endpoint is a local server. */
     fun keyError(settings: AppSettings): String? =
         if (settings.apiKey.isBlank() && !settings.baseUrl.contains("localhost") &&
@@ -198,7 +265,7 @@ class ChatRepository(
         continueLast: Boolean = false
     ): List<ChatMessage> {
         val recent = history.takeLast(settings.contextMessages)
-        val lore = LoreMatcher.match(lorebookDao.getEnabled(), recent.joinToString("\n") { it.content })
+        val lore = LoreMatcher.match(lorebookDao.getEnabledFor(session.id), recent.joinToString("\n") { it.content })
         val system = PromptBuilder.chat(
             characters = charactersFor(session),
             globalInstructions = settings.globalInstructions,
@@ -229,7 +296,7 @@ class ChatRepository(
         val system = PromptBuilder.writing(
             globalInstructions = settings.globalInstructions,
             memories = memoryDao.getForSession(sessionId),
-            lore = LoreMatcher.match(lorebookDao.getEnabled(), document),
+            lore = LoreMatcher.match(lorebookDao.getEnabledFor(sessionId), document),
             note = sessionDao.getById(sessionId)?.note.orEmpty()
         )
         return listOf(
@@ -357,6 +424,7 @@ class ChatRepository(
 
     companion object {
         const val MAX_NEW_MEMORIES = 3
+        const val BRANCH_SUFFIX = " (branch)"
 
         private const val MEMORY_SYSTEM_PROMPT =
             "You maintain the long-term memory of a roleplay. From the latest exchange, extract at " +

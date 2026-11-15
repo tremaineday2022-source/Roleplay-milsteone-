@@ -122,9 +122,14 @@ class BackupManager(private val db: AppDatabase, private val images: ImageStore)
                 memories++
             }
 
-            backup.lorebook.sortedBy { it.id }.forEach { db.lorebookDao().upsert(it.copy(id = 0)) }
+            var lore = 0
+            backup.lorebook.sortedBy { it.id }.forEach { entry ->
+                val sessionId = if (entry.sessionId == 0L) 0L else sessionIds[entry.sessionId] ?: return@forEach
+                db.lorebookDao().upsert(entry.copy(id = 0, sessionId = sessionId))
+                lore++
+            }
 
-            ImportSummary(characterIds.size, sessionIds.size, messages, memories, backup.lorebook.size)
+            ImportSummary(characterIds.size, sessionIds.size, messages, memories, lore)
         }
     }
 }

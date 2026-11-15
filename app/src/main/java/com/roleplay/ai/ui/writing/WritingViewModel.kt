@@ -143,6 +143,14 @@ class WritingViewModel(
 
     fun dismissError() { _error.value = null }
 
+    /** Saves what is on screen right now, then runs [then] (used before exporting). */
+    fun saveNow(then: () -> Unit) {
+        viewModelScope.launch {
+            save(document.text)
+            then()
+        }
+    }
+
     private suspend fun save(text: String) {
         if (text == lastSaved) {
             _saved.value = true
