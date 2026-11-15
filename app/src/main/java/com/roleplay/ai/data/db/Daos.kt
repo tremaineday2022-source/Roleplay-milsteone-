@@ -37,8 +37,11 @@ interface CharacterDao {
 
 @Dao
 interface SessionDao {
-    @Query("SELECT * FROM sessions ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM sessions ORDER BY pinned DESC, updatedAt DESC")
     fun observeAll(): Flow<List<SessionEntity>>
+
+    @Query("UPDATE sessions SET pinned = :pinned WHERE id = :id")
+    suspend fun updatePinned(id: Long, pinned: Boolean)
 
     @Query("SELECT * FROM sessions WHERE id = :id")
     fun observeById(id: Long): Flow<SessionEntity?>
@@ -88,6 +91,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY id ASC")
     suspend fun getAll(): List<MessageEntity>
 
+    @Query("SELECT sessionId, content FROM messages WHERE id IN (SELECT MAX(id) FROM messages GROUP BY sessionId)")
+    fun observeLastMessages(): Flow<List<LastMessage>>
+
     @Query("SELECT images FROM messages WHERE images != '[]'")
     suspend fun getAllImageLists(): List<String>
 
@@ -121,6 +127,10 @@ interface MemoryDao {
     @Query("SELECT * FROM memories WHERE sessionId = :sessionId OR sessionId = 0 ORDER BY createdAt DESC")
     suspend fun getForSession(sessionId: Long): List<MemoryEntity>
 
+    /** Only the memories that belong to this session (not the ones shared by all). */
+    @Query("SELECT * FROM memories WHERE sessionId = :sessionId ORDER BY id ASC")
+    suspend fun getOwnedBy(sessionId: Long): List<MemoryEntity>
+
     @Query("SELECT * FROM memories ORDER BY id ASC")
     suspend fun getAll(): List<MemoryEntity>
 
@@ -142,14 +152,23 @@ interface MemoryDao {
 
 @Dao
 interface LorebookDao {
-    @Query("SELECT * FROM lorebook ORDER BY name COLLATE NOCASE ASC, id ASC")
-    fun observeAll(): Flow<List<LorebookEntity>>
+    /** Shared entries plus those of [sessionId]; pass 0 for the shared entries alone. */
+    @Query("SELECT * FROM lorebook WHERE sessionId = 0 OR sessionId = :sessionId ORDER BY name COLLATE NOCASE ASC, id ASC")
+    fun observeFor(sessionId: Long): Flow<List<LorebookEntity>>
+
+    /** Enabled entries that apply in [sessionId]: its own and the shared ones. */
+    @Query("SELECT * FROM lorebook WHERE enabled = 1 AND (sessionId = 0 OR sessionId = :sessionId) ORDER BY id ASC")
+    suspend fun getEnabledFor(sessionId: Long): List<LorebookEntity>
+
+    /** Only the entries that belong to this session. */
+    @Query("SELECT * FROM lorebook WHERE sessionId = :sessionId ORDER BY id ASC")
+    suspend fun getOwnedBy(sessionId: Long): List<LorebookEntity>
+
+    @Query("DELETE FROM lorebook WHERE sessionId = :sessionId AND sessionId != 0")
+    suspend fun deleteForSession(sessionId: Long)
 
     @Query("SELECT * FROM lorebook ORDER BY id ASC")
     suspend fun getAll(): List<LorebookEntity>
-
-    @Query("SELECT * FROM lorebook WHERE enabled = 1 ORDER BY id ASC")
-    suspend fun getEnabled(): List<LorebookEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: LorebookEntity): Long

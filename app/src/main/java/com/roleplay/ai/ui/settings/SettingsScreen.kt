@@ -57,6 +57,7 @@ import com.roleplay.ai.data.prefs.ThemeMode
 import com.roleplay.ai.ui.AppViewModel
 import com.roleplay.ai.ui.ConnectionState
 import com.roleplay.ai.ui.common.FileImage
+import com.roleplay.ai.ui.common.scaledBy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,6 +65,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private data class ProviderPreset(val name: String, val baseUrl: String, val model: String)
 
@@ -196,12 +198,23 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
             }
 
             val shortenedKey = "..." in settings.apiKey || "…" in settings.apiKey
+            val unencrypted = isUnencryptedRemote(settings.baseUrl)
             OutlinedTextField(
                 value = settings.baseUrl,
                 onValueChange = { v -> update { it.copy(baseUrl = v) } },
                 label = { Text("Base URL") },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = loaded,
+                isError = unencrypted,
+                supportingText = if (unencrypted) {
+                    {
+                        Text(
+                            "This address is not encrypted (http://). Your messages and API key could " +
+                                "be read by others on the network. Use https:// unless this is a " +
+                                "server on your own device or home network."
+                        )
+                    }
+                } else null,
                 singleLine = true
             )
             OutlinedTextField(
@@ -276,7 +289,7 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
             ) {
                 Text("Temperature", modifier = Modifier.weight(1f))
                 Text(
-                    String.format("%.1f", settings.temperature),
+                    String.format(Locale.US, "%.1f", settings.temperature),
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -311,6 +324,22 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
                     }
                 }
             }
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Text size", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                Text("${(settings.textScale * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium)
+            }
+            Slider(
+                value = settings.textScale,
+                onValueChange = { v -> update { it.copy(textScale = (v * 10).roundToInt() / 10f) } },
+                valueRange = AppSettings.MIN_TEXT_SCALE..AppSettings.MAX_TEXT_SCALE,
+                steps = 7,
+                enabled = loaded
+            )
+            Text(
+                "This is how big messages and documents will look.",
+                style = MaterialTheme.typography.bodyMedium.scaledBy(settings.textScale)
+            )
 
             Text("Chat background", style = MaterialTheme.typography.labelLarge)
             Row(
@@ -481,6 +510,17 @@ fun SettingsScreen(app: RoleplayApp, onOpenLorebook: () -> Unit) {
             }
         )
     }
+}
+
+/** True for an `http://` address that is not on this device or a private home network. */
+internal fun isUnencryptedRemote(baseUrl: String): Boolean {
+    val url = baseUrl.trim().lowercase()
+    if (!url.startsWith("http://")) return false
+    val host = url.removePrefix("http://").substringBefore('/').substringBefore(':')
+    val local = host == "localhost" || host.endsWith(".local") || host.startsWith("127.") ||
+        host.startsWith("10.") || host.startsWith("192.168.") ||
+        Regex("172\\.(1[6-9]|2[0-9]|3[01])\\..*").matches(host)
+    return !local
 }
 
 @Composable

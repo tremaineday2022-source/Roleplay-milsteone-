@@ -1,6 +1,8 @@
 package com.roleplay.ai.ui.memory
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -58,6 +61,11 @@ class MemoryViewModel(
         viewModelScope.launch {
             repo.saveMemory(MemoryEntity(sessionId = sessionId, content = content.trim()))
         }
+    }
+
+    fun edit(memory: MemoryEntity, content: String) {
+        val trimmed = content.trim().ifEmpty { return }
+        viewModelScope.launch { repo.saveMemory(memory.copy(content = trimmed)) }
     }
 
     fun toggle(memory: MemoryEntity) {
@@ -87,6 +95,7 @@ fun MemoryScreen(
     val viewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(app, sessionId))
     val memories by viewModel.memories.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<MemoryEntity?>(null) }
 
     Scaffold(
         topBar = {
@@ -119,14 +128,38 @@ fun MemoryScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (memories.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("No memories yet", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Add a fact the AI should never forget, or long-press a message in the chat " +
+                            "and choose \"Save as memory\".",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(top = 8.dp),
+                contentPadding = PaddingValues(bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(memories, key = { it.id }) { memory ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { editing = memory }
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -152,6 +185,34 @@ fun MemoryScreen(
                 }
             }
         }
+    }
+
+    editing?.let { memory ->
+        var text by remember(memory) { mutableStateOf(memory.content) }
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text("Edit memory") },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.edit(memory, text)
+                        editing = null
+                    },
+                    enabled = text.isNotBlank()
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editing = null }) { Text("Cancel") }
+            }
+        )
     }
 
     if (showAdd) {

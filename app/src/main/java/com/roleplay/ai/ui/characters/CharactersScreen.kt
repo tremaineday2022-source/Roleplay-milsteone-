@@ -25,6 +25,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.roleplay.ai.RoleplayApp
+import com.roleplay.ai.data.db.CharacterEntity
+import com.roleplay.ai.ui.common.ConfirmDeleteDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +47,20 @@ fun CharactersScreen(
 ) {
     val viewModel: CharactersViewModel = viewModel(factory = CharactersViewModel.factory(app))
     val characters by viewModel.characters.collectAsStateWithLifecycle()
+    var deleting by remember { mutableStateOf<CharacterEntity?>(null) }
+
+    deleting?.let { character ->
+        ConfirmDeleteDialog(
+            title = "Delete ${character.name}?",
+            text = "The character will be deleted. Chats you already had with them are kept, " +
+                "but new replies there will no longer use this character's persona. This cannot be undone.",
+            onConfirm = {
+                viewModel.delete(character)
+                deleting = null
+            },
+            onDismiss = { deleting = null }
+        )
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Characters") }) },
@@ -119,7 +138,7 @@ fun CharactersScreen(
                             IconButton(onClick = { onEditCharacter(character.id) }) {
                                 Icon(Icons.Filled.Edit, contentDescription = "Edit")
                             }
-                            IconButton(onClick = { viewModel.delete(character) }) {
+                            IconButton(onClick = { deleting = character }) {
                                 Icon(Icons.Filled.Delete, contentDescription = "Delete")
                             }
                         }

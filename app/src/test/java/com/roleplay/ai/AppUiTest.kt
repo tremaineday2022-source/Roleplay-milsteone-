@@ -3,6 +3,7 @@ package com.roleplay.ai
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -93,6 +94,12 @@ class AppUiTest {
     /** Clicks a label, including labels that sit inside buttons. */
     private fun clickText(text: String) = rule.onNodeWithText(text, useUnmergedTree = true).performClick()
 
+    /** Taps a button by its description once it is on screen (some only appear when a reply has finished saving). */
+    private fun clickWhenShown(description: String) {
+        rule.waitUntilAtLeastOneExists(hasContentDescription(description), 15_000)
+        rule.onNodeWithContentDescription(description).performClick()
+    }
+
     private fun waitForText(text: String, substring: Boolean = false) =
         rule.waitUntilAtLeastOneExists(hasText(text, substring = substring), 15_000)
 
@@ -132,11 +139,11 @@ class AppUiTest {
         assertTrue(systems.any { "You play ALL of these characters: \"Bron\", \"Captain Vex\"" in it })
 
         chatReplies += "**Bron:** Second answer"
-        rule.onNodeWithContentDescription("Regenerate").performClick()
+        clickWhenShown("Regenerate")
         waitForText("Bron: Second answer")
         waitForText("2/2")
         chatReplies += "**Bron:** Third answer"
-        rule.onNodeWithContentDescription("Regenerate").performClick()
+        clickWhenShown("Regenerate")
         waitForText("Bron: Third answer")
         waitForText("3/3")
 
@@ -150,12 +157,12 @@ class AppUiTest {
         rule.onNodeWithText("Bron: Third answer").performTouchInput { swipeLeft() }
         waitForText("Bron: First answer")
         waitForText("1/3")
-        rule.onNodeWithContentDescription("Previous reply").performClick()
+        clickWhenShown("Previous reply")
         waitForText("3/3")
 
         // -- Continue the last reply --
         chatReplies += "that keeps going."
-        rule.onNodeWithContentDescription("Continue").performClick()
+        clickWhenShown("Continue")
         waitForText("Bron: Third answer that keeps going.")
         val sessionId = runBlocking { app.repository.db.sessionDao().getAll().single().id }
         val stored = runBlocking { app.repository.getMessages(sessionId) }
@@ -181,12 +188,16 @@ class AppUiTest {
         rule.waitUntil(15_000) {
             runBlocking { app.repository.db.memoryDao().getForSession(sessionId) }.any { it.content == "The user is the new deckhand." }
         }
-        rule.onNodeWithContentDescription("Memories").performClick()
+        rule.onNodeWithContentDescription("More options").performClick()
+        clickText("Memories")
         waitForText("The user is the new deckhand.")
         rule.onNodeWithContentDescription("Back").performClick()
 
         // -- Lorebook, opened from the chat --
         rule.onNodeWithContentDescription("Lorebook").performClick()
+        // Opened from a chat, the lorebook has a tab for this chat and one for the shared entries.
+        waitForText("This chat (0)")
+        clickText("All chats (0)")
         clickText("Add entry")
         rule.onNodeWithText("Name").performTextInput("Brine")
         rule.onNodeWithText("Trigger keywords, separated by commas").performTextInput("brine, lighthouse")

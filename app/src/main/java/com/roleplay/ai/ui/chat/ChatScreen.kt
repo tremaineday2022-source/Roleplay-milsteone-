@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
@@ -33,13 +34,18 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -52,6 +58,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -63,13 +70,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -85,7 +97,13 @@ import com.roleplay.ai.ui.characters.avatarFile
 import com.roleplay.ai.ui.common.NoteDialog
 import com.roleplay.ai.ui.common.NoteStrip
 import com.roleplay.ai.ui.common.FileImage
+import com.roleplay.ai.ui.common.LocalReadingScale
+import com.roleplay.ai.ui.common.RenameDialog
+import com.roleplay.ai.ui.common.rememberExportActions
+import com.roleplay.ai.ui.common.scaledBy
 import com.roleplay.ai.ui.common.roleplayText
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,7 +113,8 @@ fun ChatScreen(
     sessionId: Long,
     onBack: () -> Unit,
     onOpenMemories: () -> Unit,
-    onOpenLorebook: () -> Unit
+    onOpenLorebook: () -> Unit,
+    onOpenChat: (Long) -> Unit
 ) {
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(app, sessionId))
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -107,9 +126,14 @@ fun ChatScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     val tokens by viewModel.tokens.collectAsStateWithLifecycle()
     var editingNote by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    val export = rememberExportActions(app) { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
     var input by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<MessageEntity?>(null) }
     var pinning by remember { mutableStateOf<MessageEntity?>(null) }
@@ -125,10 +149,22 @@ fun ChatScreen(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 6)
     ) { uris -> viewModel.attachImages(uris) }
 
+    // Follow new text only while the view is at the bottom, so scrolling up to re-read is not
+    // undone by every word of a streaming reply. Updated whenever a scroll (by finger or by the
+    // code below) comes to rest.
+    var followBottom by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            // The first value is the list at rest as the chat opens, not the end of a scroll.
+            // Acting on it could switch following off before the first jump to the latest
+            // message, leaving a chat open at its top.
+            .drop(1)
+            .collect { scrolling -> if (!scrolling) followBottom = !listState.canScrollForward }
+    }
+    val itemCount = messages.size + if (showsNewBubble) 1 else 0
     LaunchedEffect(messages.size, generation?.text, lastMessage?.content) {
-        val count = messages.size + if (showsNewBubble) 1 else 0
         // A huge offset pins the view to the bottom of the last item while it grows.
-        if (count > 0) listState.scrollToItem(count - 1, Int.MAX_VALUE / 2)
+        if (followBottom && itemCount > 0) listState.scrollToItem(itemCount - 1, Int.MAX_VALUE / 2)
     }
 
     LaunchedEffect(error) {
@@ -172,7 +208,12 @@ fun ChatScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            val subtitle = if (isGroup) "Group chat · ${characters.size} characters" else character?.tagline.orEmpty()
+                            val subtitle = when {
+                                isGroup -> "Group chat · ${characters.size} characters"
+                                // A renamed chat shows its own name under the character's.
+                                session != null && session?.title != character?.name -> session?.title.orEmpty()
+                                else -> character?.tagline.orEmpty()
+                            }
                             if (subtitle.isNotBlank()) {
                                 Text(
                                     subtitle,
@@ -197,8 +238,32 @@ fun ChatScreen(
                     IconButton(onClick = onOpenLorebook) {
                         Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Lorebook")
                     }
-                    IconButton(onClick = onOpenMemories) {
-                        Icon(Icons.Filled.Save, contentDescription = "Memories")
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Memories") },
+                                leadingIcon = { Icon(Icons.Filled.Psychology, contentDescription = null) },
+                                onClick = { menuOpen = false; onOpenMemories() }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Rename chat") },
+                                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                onClick = { menuOpen = false; renaming = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save as text file") },
+                                leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                                onClick = { menuOpen = false; export.saveAsFile(sessionId) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share as text") },
+                                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                                onClick = { menuOpen = false; export.share(sessionId) }
+                            )
+                        }
                     }
                 }
             )
@@ -230,11 +295,14 @@ fun ChatScreen(
                 session?.note?.takeIf { it.isNotBlank() }?.let { note ->
                     NoteStrip(note = note, onClick = { editingNote = true })
                 }
-                LazyColumn(
-                    state = listState,
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -254,6 +322,11 @@ fun ChatScreen(
                             streaming = target != null,
                             translucent = hasBackground,
                             imageFile = viewModel::imageFile,
+                            onCopy = {
+                                clipboard.setText(AnnotatedString(message.content))
+                                scope.launch { snackbarHostState.showSnackbar("Message copied.") }
+                            },
+                            onBranch = if (generating) null else ({ viewModel.branchFrom(message, onOpenChat) }),
                             onEdit = if (generating) null else ({ editing = message }),
                             onDelete = if (generating) null else ({ viewModel.deleteMessage(message) }),
                             onPin = { pinning = message },
@@ -273,6 +346,20 @@ fun ChatScreen(
                                 translucent = hasBackground,
                                 imageFile = viewModel::imageFile
                             )
+                        }
+                    }
+                }
+                    if (!followBottom && listState.canScrollForward) {
+                        SmallFloatingActionButton(
+                            onClick = {
+                                followBottom = true
+                                scope.launch { if (itemCount > 0) listState.scrollToItem(itemCount - 1, Int.MAX_VALUE / 2) }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(12.dp)
+                        ) {
+                            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Jump to latest message")
                         }
                     }
                 }
@@ -358,6 +445,7 @@ fun ChatScreen(
                             } else {
                                 IconButton(
                                     onClick = {
+                                        followBottom = true
                                         viewModel.send(input)
                                         input = ""
                                     },
@@ -381,6 +469,18 @@ fun ChatScreen(
                 viewModel.updateMessage(message, it)
                 editing = null
             }
+        )
+    }
+
+    if (renaming) {
+        RenameDialog(
+            title = "Rename chat",
+            initial = session?.title.orEmpty(),
+            onSave = {
+                viewModel.rename(it)
+                renaming = false
+            },
+            onDismiss = { renaming = false }
         )
     }
 
@@ -423,6 +523,8 @@ private fun MessageBubble(
     streaming: Boolean,
     imageFile: (String) -> File,
     translucent: Boolean = false,
+    onCopy: (() -> Unit)? = null,
+    onBranch: (() -> Unit)? = null,
     onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onPin: (() -> Unit)? = null,
@@ -497,10 +599,22 @@ private fun MessageBubble(
                     }
                     val shown = if (streaming && text.isBlank()) "…" else text
                     if (shown.isNotBlank()) {
-                        Text(roleplayText(shown), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            roleplayText(shown),
+                            style = MaterialTheme.typography.bodyMedium.scaledBy(LocalReadingScale.current)
+                        )
                     }
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (message.content.isNotBlank()) {
+                        onCopy?.let {
+                            DropdownMenuItem(
+                                text = { Text("Copy text") },
+                                leadingIcon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+                                onClick = { menuOpen = false; it() }
+                            )
+                        }
+                    }
                     onEdit?.let {
                         DropdownMenuItem(
                             text = { Text("Edit") },
@@ -516,6 +630,13 @@ private fun MessageBubble(
                                 onClick = { menuOpen = false; it() }
                             )
                         }
+                    }
+                    onBranch?.let {
+                        DropdownMenuItem(
+                            text = { Text("Branch from here") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null) },
+                            onClick = { menuOpen = false; it() }
+                        )
                     }
                     onRegenerate?.let {
                         DropdownMenuItem(
@@ -624,5 +745,6 @@ private fun tokenLine(usage: TokenUsage): String {
     val sent = (if (usage.exact) "" else "≈") + format.format(usage.sent) + " tokens sent"
     val received = usage.received?.let { " · " + format.format(it) + " received" }.orEmpty()
     val note = if (usage.exact) " (last reply)" else " (estimate, last reply)"
-    return sent + received + note
+    val model = usage.model?.let { " · $it" }.orEmpty()
+    return sent + received + note + model
 }

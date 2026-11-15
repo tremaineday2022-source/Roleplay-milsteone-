@@ -30,7 +30,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Tokens of the last request: an estimate until the provider reports the real counts. */
-data class TokenUsage(val sent: Int, val received: Int?, val exact: Boolean)
+data class TokenUsage(
+    val sent: Int,
+    val received: Int?,
+    val exact: Boolean,
+    /** The model that answered, when the character overrides the app default. */
+    val model: String? = null
+)
 
 /** A reply being generated: what it is for, which message it targets, and the text so far. */
 data class Generation(val kind: ReplyKind, val targetId: Long?, val text: String)
@@ -138,6 +144,19 @@ class ChatViewModel(
         viewModelScope.launch { repo.deleteMessage(message) }
     }
 
+    fun rename(title: String) {
+        val trimmed = title.trim().ifEmpty { return }
+        viewModelScope.launch { repo.updateSessionTitle(sessionId, trimmed) }
+    }
+
+    /** Copies the chat up to [message] into a new chat and hands back its id. */
+    fun branchFrom(message: MessageEntity, onReady: (Long) -> Unit) {
+        viewModelScope.launch {
+            val branchId = repo.branchSession(sessionId, message.id)
+            if (branchId != null) onReady(branchId) else _error.value = "That message could not be branched."
+        }
+    }
+
     fun saveNote(note: String) {
         viewModelScope.launch { repo.updateNote(sessionId, note) }
     }
@@ -185,11 +204,13 @@ class ChatViewModel(
                 _generation.value = Generation(kind, targetId, "")
                 _error.value = null
                 val request = repo.chatRequest(session, history, loadedSettings, continueLast = kind == ReplyKind.CONTINUE)
-                _tokens.value = TokenUsage(TokenEstimate.request(request), null, exact = false)
+                val config = repo.apiConfigFor(loadedSettings, repo.charactersFor(session))
+                val overriddenModel = config.model.takeIf { it != loadedSettings.model }
+                _tokens.value = TokenUsage(TokenEstimate.request(request), null, exact = false, model = overriddenModel)
                 val onUsage: (Usage) -> Unit = { usage ->
-                    _tokens.value = TokenUsage(usage.promptTokens, usage.completionTokens, exact = true)
+                    _tokens.value = TokenUsage(usage.promptTokens, usage.completionTokens, exact = true, model = overriddenModel)
                 }
-                repo.stream(repo.toApiConfig(loadedSettings), request, onUsage).collect { delta ->
+                repo.stream(config, request, onUsage).collect { delta ->
                     builder.append(delta)
                     _generation.value = Generation(kind, targetId, builder.toString())
                 }

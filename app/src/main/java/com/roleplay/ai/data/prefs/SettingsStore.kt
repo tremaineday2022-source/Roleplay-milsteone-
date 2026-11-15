@@ -33,8 +33,15 @@ data class AppSettings(
     /** File name (in the app image folder) of the custom chat background; blank for none. */
     val chatBackground: String = "",
     /** Writing mode sends at most this many of the latest words; 0 sends the whole document. */
-    val writingContextWords: Int = 0
-)
+    val writingContextWords: Int = 0,
+    /** Size of message and document text, as a multiple of the normal size. */
+    val textScale: Float = 1f
+) {
+    companion object {
+        const val MIN_TEXT_SCALE = 0.8f
+        const val MAX_TEXT_SCALE = 1.6f
+    }
+}
 
 class SettingsStore(private val context: Context) {
 
@@ -53,6 +60,7 @@ class SettingsStore(private val context: Context) {
         val AUTO_MEMORY = booleanPreferencesKey("auto_memory")
         val CHAT_BACKGROUND = stringPreferencesKey("chat_background")
         val WRITING_CONTEXT_WORDS = intPreferencesKey("writing_context_words")
+        val TEXT_SCALE = floatPreferencesKey("text_scale")
     }
 
     private fun read(p: Preferences) = AppSettings(
@@ -69,7 +77,8 @@ class SettingsStore(private val context: Context) {
         streaming = p[Keys.STREAMING] ?: true,
         autoMemory = p[Keys.AUTO_MEMORY] ?: true,
         chatBackground = p[Keys.CHAT_BACKGROUND] ?: "",
-        writingContextWords = p[Keys.WRITING_CONTEXT_WORDS] ?: 0
+        writingContextWords = p[Keys.WRITING_CONTEXT_WORDS] ?: 0,
+        textScale = (p[Keys.TEXT_SCALE] ?: 1f).coerceIn(AppSettings.MIN_TEXT_SCALE, AppSettings.MAX_TEXT_SCALE)
     )
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { read(it) }
@@ -92,6 +101,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.AUTO_MEMORY] = next.autoMemory
             p[Keys.CHAT_BACKGROUND] = next.chatBackground
             p[Keys.WRITING_CONTEXT_WORDS] = next.writingContextWords.coerceAtLeast(0)
+            p[Keys.TEXT_SCALE] = next.textScale.coerceIn(AppSettings.MIN_TEXT_SCALE, AppSettings.MAX_TEXT_SCALE)
         }
     }
 }
